@@ -37,6 +37,8 @@ The two parts must describe the same patient and the same tests, following the c
 | D12 | **Test metadata goes out both ways now: BED files and genomicStudy.** Each test gets its Mongo Tests and BED records (for `$find-study-metadata`) *and* GenomicStudy / GenomicStudyAnalysis resources in the FHIR bundle. This is an exception to D7: `$find-study-metadata` returns a `Parameters` resource, not GenomicStudy, so the Operations can't produce it yet. Both outputs come from one internal test record, so they agree by construction. See "Test metadata". | Bob, 2026-11-09 |
 | D13 | **WES or WGS studies only.** Targeted-panel studies (e.g. MSK-IMPACT) are out. A study with a mix of WES and panel samples is out unless only its WES/WGS samples are used. | Bob, 2026-11-09 |
 | D14 | **First study: `luad_tcga_pan_can_atlas_2018`** (TCGA PanCancer Atlas lung adenocarcinoma; WES, GRCh37, 566 samples). It has every data type we map, many actionable variants (EGFR, KRAS G12C, BRAF, MET) and real fusions (ALK, ROS1, RET; Q12). Its clinical mapping then covers the other 31 TCGA PanCancer studies. See Q1. | Bob, 2026-11-09 |
+| D15 | **Genomic data is written straight to Mongo records; no VCF for now** (route (b) of Q2). The generator writes Patients, Tests, Variants, MolecConseq and BED records from the cBioPortal calls, doing its own SPDI normalization and molecular consequences. The existing VCF pipeline (`vcfPrepper` → `run_vcf2json` → `to_mongo`) and its known bugs are left alone. A VCF per test can be added later if wanted. | Bob, 2026-11-09 |
+| D16 | **A couple of representative patients have images** (pathology slides and/or radiology), linked from their FHIR record to the NCI Imaging Data Commons. The images must (1) **render in the MTB app** and (2) feed an **AI interpretation pipeline** that looks for imaging findings that would change therapy recommendations. So: link to IDC for full viewing; download the selected patients' images for rendering key images and for the AI. Patient selection takes image availability into account for these few patients. See "Imaging". | Bob, 2026-11-09 |
 
 ## Target MongoDB records (from the Google Doc schema)
 
@@ -81,7 +83,7 @@ The two parts must describe the same patient and the same tests, following the c
      - **Telling the assay apart** (to verify per family): the sample's panel ID in the gene panel matrix (e.g. `IMPACT468`; TCGA samples carry a WES panel or none), sample attributes such as `SEQ_ASSAY_ID` or `GENE_PANEL` where a study has them, and the study description
      - gene and exon coordinates from the server's gene/exon utility collections or RefSeq, in the test's build
    - an **uncallable-region BED**: not at first, unless the survey finds cBioPortal surfaces callability somewhere
-   - BED records loaded with `bed2json` into the BED collection; `studiedRegion`/`uncallableRegion` in Tests hold the BedIDs. **`bed2json` may still be buggy: review and test it before use**, whichever route Q2 takes
+   - BED records loaded with `bed2json` into the BED collection; `studiedRegion`/`uncallableRegion` in Tests hold the BedIDs. **`bed2json` may still be buggy: review and test it before use** (still needed under D15)
    - `dnaChangeType` set from the data types actually loaded for the test (e.g. a panel profiled for mutations and CNA but not SVs)
    - **BedIDs** named after the panel or kit and the build (e.g. `IMPACT468.GRCh37.bed`), so tests on the same panel share one BED
 2. **The genomicStudy profiles in the FHIR bundle** (Genomics Reporting STU3, `hl7.fhir.uv.genomics-reporting#3.0.0`, which mCODE 4.0.0 builds on; FHIR R4). In R4 these are Procedure profiles with extensions. **Provisional:** the element-by-element mapping is settled in the mapping discussion, once we've examined the cBioPortal data. Per test:
@@ -93,7 +95,7 @@ The two parts must describe the same patient and the same tests, following the c
      - `specimen`: the Specimen for specimenID
      - `regions.studied`: **the gene list**, one repetition per gene as an HGNC CodeableConcept (`http://www.genenames.org/geneId`, e.g. `HGNC:76` "ABL1"), as in the IG example [analysisTumorNormalDNA](https://build.fhir.org/ig/HL7/genomics-reporting/Procedure-analysisTumorNormalDNA.json.html). No BED file is referenced (no GenomicDataFile). The genes are the same ones the studied-region BED is built from. **To decide:** for a panel this is the panel's genes (a few hundred); for WES or WGS it would be ~19,000 genes, so those may list only the 228 reportable genes (D6), with `regions.description` saying so (Q14)
      - `method-type`, `device` (sequencer), `metrics` (read depth, coverage): where the study supplies them; mostly absent for cBioPortal
-     - `input` / `output`: omitted at first (there are no real BAM or VCF files; route (a) of Q2 would add an output VCF)
+     - `input` / `output`: omitted at first (there are no real BAM or VCF files, and no VCF is written for now, D15)
    - **The genomics report** (D6) links to its GenomicStudy through the `genomic-study` extension on GenomicReport.
    - **Performer:** a synthetic lab Organization, from the seeded generator (D11), shared by every test.
    - **Consistency check** (pipeline step 5): for each test, call `$find-study-metadata` and compare its testID, testDate, specimenID, genomicBuild and dnaChangeType with the GenomicStudy and GenomicStudyAnalysis in the bundle.
@@ -170,6 +172,55 @@ Some results a tumor board expects aren't in the source studies. Where a value m
 - **Applies to:** lung studies first. Other cancer types where PD-L1 guides therapy can be added later.
 - **To check:** the treatment-era problem (Q15).
 
+## Imaging (D16)
+
+**Where the images are.** cBioPortal holds no images, only links (`data_resource_definition.txt` / `data_resource_patient.txt`) to viewers at the **NCI Imaging Data Commons (IDC)**. IDC stores the TCGA images as DICOM in public cloud buckets (AWS `s3://idc-open-data`, and Google Cloud), free to download with no account.
+
+**What exists for TCGA** (IDC v25, checked 2026-11-09 with `idc-index`):
+
+| Collection | Pathology slides (SM) | Radiology | Licence |
+|---|---|---|---|
+| `tcga_luad` (our first study) | 522 patients | CT 67, PET 23, NM 2. **No MRI** | CC BY 3.0 (images); CC BY 4.0 (IDC's derived annotations and segmentations) |
+| `tcga_brca` | 1,098 | **MRI 137**, mammography 5 | same |
+| `tcga_kirc` | 537 | CT 237, **MRI 62** | same |
+| `tcga_gbm` | 607 | none in this IDC index (TCIA's TCGA-GBM MRI is a separate collection, to check) | same |
+
+In `luad_tcga_pan_can_atlas_2018`, cBioPortal links slides for 514 patients and radiology for 62. All 17 patients with actionable fusions (ALK, RET, ROS1, MET) have slides; only `TCGA-50-8460` also has radiology (chest CT).
+
+**How IDC is accessed:**
+- **Find:** the `idc-index` Python package ships a local index of all IDC DICOM series, queried with SQL. One row per series gives PatientID (= the TCGA patient ID = our MRN, D4), modality, StudyInstanceUID / SeriesInstanceUID, study date, size, licence and the bucket URL. BigQuery offers the same metadata in more depth, but needs a Google Cloud project.
+- **View:** IDC hosts browser viewers: OHIF for radiology, SLIM for slide microscopy. URLs are built from the Study and Series UIDs (`get_viewer_URL`); these are the links cBioPortal shows.
+- **Download (only if needed):** `idc-index` downloads series, studies or patients from the buckets (`download_dicom_series` etc.). A slide is often hundreds of MB and a CT series tens of MB.
+- **No general-purpose image API to call at run time.** IDC's public DICOMweb proxy exists to drive its own viewers ("viewer-only, no downloads") and is quota-limited.
+
+**Requirements (Bob, 2026-11-09):** images must (1) render in the MTB app, and (2) go through an AI interpretation pipeline that checks for imaging findings that would change therapy recommendations. Requirement (2) needs the pixels, so "link only" isn't enough: the selected patients' images are **downloaded** from IDC's buckets (free, a few hundred MB per patient). They are not re-hosted publicly unless a rendering option below needs it.
+
+**Rendering in the MTB app: options**
+- **(a) Link out to, or embed, IDC's viewers** (OHIF for radiology, SLIM for slides). No hosting, full viewer. **To check in a browser:** whether IDC allows its viewer pages to be embedded in another site (an iframe); the URLs return 404 to command-line requests, so this couldn't be tested from a script.
+- **(b) An open-source viewer inside the app** (OHIF / Cornerstone3D for radiology, SLIM or OpenSeadragon for slides) reading from a DICOMweb server we control (e.g. Orthanc, or a Google Cloud Healthcare DICOM store) loaded with the downloaded series. IDC's own DICOMweb proxy is quota-limited and meant only for its viewers, so it can't serve our app. Most capable, most work.
+- **(c) Key images:** pre-rendered PNG/JPEG images (selected CT slices at standard windows, a slide thumbnail and a few regions) attached to the patient's FHIR record (R4 `Media`, or a DocumentReference), plus a link out to the IDC viewer for the full study. Simplest for the app, and the same images can feed the AI.
+- **Proposed:** (c) plus link-out first; (b) later if the demo needs full interactive viewing.
+
+**AI interpretation: what it needs**
+- **Inputs:**
+  - **CT/PET:** the full series as DICOM, plus derived 2D images at standard windows (lung, mediastinal, bone). General multimodal models read 2D images, not volumes, so slice selection or sampling is part of preprocessing; specialized models (e.g. nodule detection, organ segmentation) could run on the full volume.
+  - **Slides:** a thumbnail plus tiles at chosen magnifications; whole slides are too large to pass whole.
+  - IDC already holds AI-derived annotations and segmentations for `tcga_luad` (ANN for 478 patients, SEG for 489; CC BY 4.0). Possible extra inputs; to examine.
+- **Findings that alter therapy** (examples for the pipeline to look for): previously unknown metastases (brain, liver, bone, adrenal), which can change stage and intent; malignant pleural effusion or contralateral nodules (M1a); progression or response on current therapy; on pathology, a histology that differs from the recorded one.
+- **No ground truth:** TCGA has no radiology reports, so the pipeline's findings can't be checked against a real report. If needed, a clinician could review the couple of demo cases.
+- **To decide:** whether the AI pipeline lives in this repository or in the MTB app (the MTB app's case syntheses are outside this pipeline). Either way, this repository supplies the downloaded images, the derived key images, and the FHIR resources pointing at them.
+
+**FHIR**
+- An **ImagingStudy** per DICOM study (StudyInstanceUID, modality, series, an `endpoint` pointing at IDC), plus key images as `Media` or DocumentReference. Exact resources are settled in the mapping discussion. AI findings, if this repository produces them, would be an imaging DiagnosticReport with Observations.
+
+**Placing images on the timeline (open)**
+- What the AI concludes depends on *when* the scan was taken: a pre-treatment baseline and a restaging scan mean different things for therapy. DICOM headers carry IDC's own (de-identified) dates, e.g. 2003-02-05 for `TCGA-50-8460`'s CT, while the TCGA clinical data counts days from diagnosis and gives no calendar diagnosis date. **To check:** whether the scan date can be placed relative to diagnosis (e.g. IDC or TCIA clinical metadata, or the date-shifting convention used for the TCGA collections). If it can't, each demo patient's scans get a stated, plausible position (e.g. staging at diagnosis), recorded in the run CSV.
+- The FHIR resources use our shifted timeline, so they won't match the DICOM header dates.
+
+**Selection:** pick a couple of patients with images, at least one with radiology. For lung, radiology means CT/PET (no MRI in `tcga_luad`); an MRI example would come from another TCGA study (BRCA, KIRC).
+
+**Attribution:** IDC images are CC BY: cite IDC and the source collection (`idc-index` provides citations). Sending the images to an AI model is compatible with CC BY.
+
 ## What cBioPortal provides (to verify against the API)
 
 - **Clinical attributes** per patient and per sample: sex, age, cancer type and detailed type, stage, survival and status, and in some studies race/ethnicity, treatments and a timeline (days relative to diagnosis).
@@ -192,11 +243,10 @@ So "raw genetic data" will be generated from the somatic calls, not downloaded.
      - **Why it matters:** reruns are idempotent. The same FHIR resources are PUT again and the same Mongo records are replaced, so re-extracting, remapping or extracting more data types later (D10) never renames a patient or moves their timeline. That holds because the seed depends only on the MRN, never on the clinical or genomic data.
      - **One field per seed** (e.g. hash of MRN + `"name"`): adding a new filler field later then doesn't shift the existing ones.
      - **Alternative:** generate the filler once, save it in the patient's extract folder, and reuse it. Equally stable, but it adds a file to keep.
-3. **Genomic data**, two routes (Q2). Either way, a small generator writes the Patients and Tests records, which `run_vcf2json` doesn't produce, and the studied-region BEDs (see "Test metadata").
-   - **(a) Write a VCF per test, then run the existing pipeline:** `vcfPrepper` (snpEff + gnomAD AF) → `run_vcf2json` → `to_mongo`. Reuses SPDI normalization and the snpEff molecular consequences, and leaves a VCF per test.
-     **Cost:** `vcfPrepper`, `run_vcf2json` and the related scripts have known bugs (e.g. the AD/DP allele-count error in the Google Doc). Taking this route means fixing them first, so the new patients don't inherit the bugs.
-   - **(b) Write the Mongo records directly** from the cBioPortal calls. The bugs in `vcfPrepper` and `run_vcf2json` can then wait. The generator does its own SPDI normalization (`SPDI_Normalization.py` or the server's `normalize-variant`) and writes its own MolecConseq records (see "Molecular consequences" below).
-   - No recommendation yet: it depends on whether fixing the pipeline is work we want now anyway.
+3. **Genomic data: Mongo records written directly (D15).** The generator writes all the records: Patients, Tests, Variants and MolecConseq, plus the studied-region BEDs (see "Test metadata").
+   - ~~**(a) Write a VCF per test, then run the existing pipeline:** `vcfPrepper` (snpEff + gnomAD AF) → `run_vcf2json` → `to_mongo`. Reuses SPDI normalization and the snpEff molecular consequences, and leaves a VCF per test.
+     **Cost:** `vcfPrepper`, `run_vcf2json` and the related scripts have known bugs (e.g. the AD/DP allele-count error in the Google Doc). Taking this route means fixing them first, so the new patients don't inherit the bugs.~~ Not chosen (D15).
+   - **(b) Write the Mongo records directly** from the cBioPortal calls (chosen, D15). The bugs in `vcfPrepper` and `run_vcf2json` can then wait. The generator does its own SPDI normalization (`SPDI_Normalization.py` or the server's `normalize-variant`) and writes its own MolecConseq records (see "Molecular consequences" below).
 4. **Clinical bundle:** build an mCODE bundle with `mcode_helpers.py`: Patient with the MRN identifier, primary cancer, staging, disease status and treatments from the timeline. Add a GenomicStudy and GenomicStudyAnalysis per test (D12), and a structured genomics report per test (D6): region studied, a GenomicVariant per reportable variant, and therapeutic implications sourced from CIViC, as described in `clinical-data/README.md` §2.1. The reported variants must match the Mongo variants for the same test exactly (same SPDI, build, test, specimen and date).
 5. **Validate and load, automatically:** validate each bundle (mCODE 4.0.0), load to HAPI, and load the Mongo records. Then run automated consistency checks: reported variants match Mongo variants; tests, specimens and dates agree; `dnaChangeType` matches the loaded types; no Y-chromosome calls for female patients.
    - **Failures:** a patient with a minor problem (e.g. an unmapped code, a validator warning) is loaded anyway and logged; a patient with a serious one (e.g. the bundle won't load, variants won't normalize) is skipped and logged.
@@ -250,7 +300,7 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
   - Excluded: MSK-IMPACT studies, incl. MSK-CHORD and MSK-MET (panels, D13); AACR GENIE (panels; not in public datahub; own terms).
   - **Proposed second family:** `pog570_bcgsc_2020`, to exercise WGS (whole-gene studied regions, Q14) and a different institution's clinical conventions.
   - Still to do for the chosen studies: count patients with actionable variants in the 228 reportable genes, and set the patient selection criteria (e.g. actionable variants, treatment history present).
-- **Q2. VCF route (a), with the pipeline bugs fixed, or direct records (b), with the fixes deferred?** MolecConseq records are wanted either way.
+- ~~Q2. VCF route (a) or direct records (b)~~: decided, direct records (D15).
 - ~~Q3. MRN scheme~~: decided, D4.
 - ~~Q4. Copy number and fusions~~: included (D5); the mapping is covered in the mapping discussion.
 - **Q5. Tests per patient.** One test per cBioPortal sample (primary and metastasis become two tests)? Add a synthetic germline test, or stay somatic only?
@@ -268,10 +318,12 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
   - accept it, as part of the deliberately messy data (Q6)
   - choose date shifts that keep each patient in their original treatment era
   - treat the history as past and focus the demo on the tumor board's next-step recommendation
+- **Q16. Where the imaging AI pipeline lives** (Bob, 2026-11-09: to come back to): in this repository or in the MTB app? Either way this repository supplies the downloaded images, key images and FHIR pointers (see "Imaging").
+- **Q17. Image rendering in the MTB app** (Bob, 2026-11-09: to come back to): key images plus a link to IDC's viewer, or a full interactive viewer in the app from the start? See "Imaging" options (a)–(c).
 - **Q13. Error tolerance.** Where is the line between "minor: load and log" and "serious: skip the patient"? Proposed starting point: anything that breaks loading, the Operations or report/server consistency is serious; unmapped codes, missing optional fields and validator warnings are minor.
 - ~~Q7. Genetic reports in FHIR~~: yes, filtered to the 228 reportable genes (D6).
 - **Q8. Genome build.** Keep the study's native build (GRCh37 for TCGA), or lift over to GRCh38 so all new patients use one build?
-- ~~Q9. Where the code lives~~: `rhdolin/synthetic-data-generator` (D8). Still open: one script per step or a single driver. If route (a) is chosen, the pipeline fixes still happen in genomics-operations, in `utilities/`.
+- ~~Q9. Where the code lives~~: `rhdolin/synthetic-data-generator` (D8). Still open: one script per step or a single driver. With direct records (D15), no pipeline fixes in genomics-operations are needed for now.
 - **Q12. Fusions: to revisit (Bob, 2026-11-08).** Fusions are important for treatment decisions (e.g. ALK, ROS1, RET, NTRK, FGFR2), but today they are **neither in Mongo nor in our FHIR**: no Mongo schema, no Operations support, and none in the demo bundles. A dedicated discussion will decide how to represent them in Mongo, in the Operations and in the FHIR report, and whether the cBioPortal fusions wait until then. Until it's resolved, other structural variants and copy number go ahead under D5.
 
   **Findings from `luad_tcga_pan_can_atlas_2018` (2026-11-09):**
