@@ -1,0 +1,47 @@
+# --- Project data ---
+# Harvest cache and generated outputs. Kept out of git until data-use terms
+# are confirmed per study (design doc Q10).
+data/*
+!data/README.md
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.maf
+*.seg
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+
+# Test / lint / type caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
