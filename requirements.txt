@@ -1,0 +1,12 @@
+# Pinned direct dependencies. Unpinned ranges live in pyproject.toml.
+# Install:  pip install -r requirements.txt && pip install -e . --no-deps
+
+# runtime
+Faker==40.44.0
+pymongo==4.19.0
+python-dotenv==1.2.4
+requests==2.34.2
+
+# dev
+pytest==9.2.0
+ruff==0.17.4
