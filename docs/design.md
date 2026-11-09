@@ -257,6 +257,45 @@ So "raw genetic data" will be generated from the somatic calls, not downloaded.
    - **Provenance** stays with each patient's extract (D10), not in the report.
    - **Case syntheses:** the MTB app's AI syntheses are not part of this pipeline.
 
+## Orchestration and distribution (proposal, 2026-11-09)
+
+Two roles, with different jobs:
+
+1. **Maintainers (Bob and Claude) curate supported studies.** Choosing a study means making sure everything it needs is in place: the pinned snapshot (D10), the family's clinical mapping and crosswalks, known data quirks and their fixes (e.g. the SV build mismatch, Q12), derived-value rules (e.g. PD-L1), and a validation run that passes. A study is **supported** only when all of that is in the repository.
+2. **Users synthesize their own patients** from supported studies, with **one command**, not a sequence of scripts.
+
+**The user's view (sketch):**
+```bash
+pip install git+https://github.com/rhdolin/synthetic-data-generator   # or a Docker image
+synthgen run --config my-run.yaml
+```
+```yaml
+# my-run.yaml
+study: luad_tcga_pan_can_atlas_2018      # must be a supported study
+patients:
+  count: 20                              # or an explicit list of patient IDs
+  require: [actionable_variant, treatment_timeline]   # selection criteria
+  prefer: [fusion, imaging]
+output:
+  dir: out/
+  fhir_server: null                      # optional: load bundles here
+  mongo_uri: null                        # optional: load genomic records here
+```
+- `synthgen run` runs every stage in order (pin → extract → synthesize → genomic → clinical → validate → load), downloading the pinned snapshot on first use.
+- **Stages are cached and rerunnable:** a stage is skipped if its inputs haven't changed, so a failed run resumes where it stopped. The individual stages remain available as subcommands (`synthgen harvest`, …) for maintainers and debugging.
+- **Output to files by default:** FHIR bundles, Mongo records as JSON, BEDs and the run report. Loading to a FHIR server or Mongo happens only if the user names one, so a user needs no servers to get started.
+- **One run report** as already proposed (summary, per-patient CSV, detailed log).
+
+**What lives in the repository for each supported study** (sketch): `studies/<study_id>/study.yaml` with the datahub commit, the study family, the mapping version, the data types supported, known quirks and their fixes, and the validation status. The family's mapping and crosswalks live in `mappings/`.
+
+**Packaging:** `pip install` from GitHub works for pure Python. If the pipeline needs non-Python tools (e.g. snpEff, which is Java, for molecular consequences), a **Docker image** spares users from installing them. To decide once the tool list is known.
+
+**Open questions:**
+- **Who are the users?** CodeX participants, implementers, other projects? Their technical level sets how much the config can assume.
+- **Same patient, same synthetic person?** The seed depends only on the MRN, so two users who pick `TCGA-50-8460` get the identical synthetic patient (name, dates, PD-L1). Good for reproducibility; but if users load into a shared server, or want variety, an optional **user seed** mixed into the MRN seed would give each user different filler. MRNs would then need a user-specific prefix to stay unique on a shared server.
+- **Where users load:** their own servers, or the shared demo servers (the public HAPI server and the Genomics Operations Mongo)? Shared servers need write credentials and a policy.
+- **Imaging:** downloads (D16) can be large; make them opt-in per run.
+
 ## Molecular consequences
 
 Two sources, used in this order:
