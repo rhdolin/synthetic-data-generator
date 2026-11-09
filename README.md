@@ -13,7 +13,7 @@ The pipeline runs end to end with no person in the loop. Synthetic filler (names
 
 | Stage | Package | What it does |
 |---|---|---|
-| 1. Harvest | `synthgen.harvest` | Fetch everything cBioPortal holds for each selected patient, with provenance (D10) |
+| 1. Harvest | `synthgen.harvest` | Pin a snapshot of each selected study, then extract the data types we port for each patient, with provenance (D10) |
 | 2. Synthesize | `synthgen.synthesize` | MRN, seeded filler, date shift, timeline (D4, D11) |
 | 3. Genomic | `synthgen.genomic` | Patients, Tests, Variants, MolecConseq and BED records for MongoDB |
 | 4. Clinical | `synthgen.clinical` | mCODE bundle and genomics report for the clinical FHIR server |
@@ -29,7 +29,7 @@ mappings/
   logical-models/  StructureDefinitions for cBioPortal inputs (only if StructureMap is adopted, D9)
 src/synthgen/    the generator
 tests/           pytest suite
-data/            local harvest cache and outputs (git-ignored)
+data/            pinned study snapshots, per-patient extracts and outputs (git-ignored)
 ```
 
 ## Getting started

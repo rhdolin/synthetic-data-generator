@@ -1,1 +1,1 @@
-"""Stage 1: harvest everything cBioPortal holds for each selected patient (design doc D10)."""
+"""Stage 1: pin a snapshot of each selected study, then extract per patient the data types we port (design doc D10)."""
