@@ -8,6 +8,20 @@ Started 2026-11-08. Status: **design discussion, no code yet.**
 - `mcode_helpers.py` is in `clinical-data/`
 - `MTB_TumorTypeCrosswalk.csv` is in `genomics-apps/mtb-app/public/data/`
 
+## Plan
+
+**Milestone 1 (done 2026-11-10):** one patient end to end, `TCGA-J2-8194`: mapping, FHIR bundle (validated, loaded to HAPI), Mongo records (loaded, checked through the Operations server).
+
+**Milestone 3 (LUAD cohort), in progress:**
+1. ~~Crosswalks complete for LUAD~~ (sites, histologies, AJCC editions, procurement, prior cancers).
+2. ~~10 varied test patients built and validated~~; gaps fixed (large indels as SVs, ALK "v::" fusions, etc.).
+3. ~~One command (`synthgen studies / patients / run`), patient selection (D23: living only), run report~~ (2026-11-11).
+4. Next: a cohort run (~20 patients) and loading them; Bob reviews in the MTB app.
+
+**Then:** milestone 2, the imaging patient (needs Q16, Q17); milestone 4, colorectal (D17; includes the MTB app's colorectal terminology updates); milestone 5, distribution (packaging, "Supported studies" docs kept current).
+
+Each step starts when Bob says so.
+
 ## Goal
 
 Take real patients from cBioPortal and turn each one into a synthetic demo patient made of two parts:
@@ -34,11 +48,18 @@ The two parts must describe the same patient and the same tests, following the c
 | D9 | **StructureMap only if necessary.** The structural mapping is a Markdown spec plus code; the clinical-attribute → mCODE part is the candidate for a StructureMap if we later want one. | Bob, 2026-11-08 (Q11) |
 | D10 | **Pin the source broadly, extract selectively.** Keep a pinned snapshot of each selected study (datahub commit or tarball), which holds everything cBioPortal has for it. Extract per patient only the data types we port; a data type needed later is extracted from the same snapshot, so it matches the version of the data already loaded. Porting to Mongo and FHIR is a separate stage. *Revised 2026-11-09: originally "harvest broadly" (extract everything per patient). The seeded generator keeps filler stable across later extractions, and the snapshot keeps the data version stable, so extracting unused data types (and writing their parsers) is no longer needed.* | Bob, 2026-11-08; revised 2026-11-09 |
 | D11 | **Fully automatic; minor errors tolerated.** No hand-written patient story or scenario; synthetic filler comes from rules, and quality is checked automatically, not by hand review. | Bob, 2026-11-08 |
-| D12 | **Test metadata goes out both ways now: BED files and genomicStudy.** Each test gets its Mongo Tests and BED records (for `$find-study-metadata`) *and* GenomicStudy / GenomicStudyAnalysis resources in the FHIR bundle. This is an exception to D7: `$find-study-metadata` returns a `Parameters` resource, not GenomicStudy, so the Operations can't produce it yet. Both outputs come from one internal test record, so they agree by construction. See "Test metadata". | Bob, 2026-11-09 |
+| D12 | **Test metadata goes out both ways now: BED files and genomicStudy.** Each test gets its Mongo Tests and BED records (for `$find-study-metadata`) *and* GenomicStudy / GenomicStudyAnalysis resources in the FHIR bundle. This is an exception to D7: `$find-study-metadata` returns a `Parameters` resource, not GenomicStudy, so the Operations can't produce it yet. Both outputs come from one internal test record, so they agree by construction. See "Test metadata". **Correction (2026-11-10):** mCODE 4.0.0 depends on Genomics Reporting **2.0.0**, which has no GenomicStudy; GenomicStudy/GenomicStudyAnalysis come from Genomics Reporting 3.0.0, so the bundle mixes the two (variants, implications and the report per 2.0.0 via mCODE; GenomicStudy per 3.0.0). See open question Q18. | Bob, 2026-11-09 |
 | D13 | **WES or WGS studies only.** Targeted-panel studies (e.g. MSK-IMPACT) are out. A study with a mix of WES and panel samples is out unless only its WES/WGS samples are used. | Bob, 2026-11-09 |
 | D14 | **First study: `luad_tcga_pan_can_atlas_2018`** (TCGA PanCancer Atlas lung adenocarcinoma; WES, GRCh37, 566 samples). It has every data type we map, many actionable variants (EGFR, KRAS G12C, BRAF, MET) and real fusions (ALK, ROS1, RET; Q12). Its clinical mapping then covers the other 31 TCGA PanCancer studies. See Q1. | Bob, 2026-11-09 |
 | D15 | **Genomic data is written straight to Mongo records; no VCF for now** (route (b) of Q2). The generator writes Patients, Tests, Variants, MolecConseq and BED records from the cBioPortal calls, doing its own SPDI normalization and molecular consequences. The existing VCF pipeline (`vcfPrepper` → `run_vcf2json` → `to_mongo`) and its known bugs are left alone. A VCF per test can be added later if wanted. | Bob, 2026-11-09 |
 | D16 | **A couple of representative patients have images** (pathology slides and/or radiology), linked from their FHIR record to the NCI Imaging Data Commons. The images must (1) **render in the MTB app** and (2) feed an **AI interpretation pipeline** that looks for imaging findings that would change therapy recommendations. So: link to IDC for full viewing; download the selected patients' images for rendering key images and for the AI. Patient selection takes image availability into account for these few patients. See "Imaging". | Bob, 2026-11-09 |
+| D17 | **Second study: `coadread_tcga_pan_can_atlas_2018`** (TCGA PanCancer colorectal; WES, 594 patients), after lung. It adds metastatic-at-diagnosis patients (83 M1), richer treatment lines (FOLFOX, FOLFIRI, bevacizumab, cetuximab) and colorectal biomarkers (MSI-high 78, RAS and BRAF status, ERBB2, an NTRK3 fusion). Weaker on dated recurrences (23) and radiology (CT for 21); no metastatic sites. **New cancer type, so terminology updates too** (Bob, 2026-11-10): beyond this repo's colorectal crosswalks (sites, histologies, metastasis sites, CIViC tumor-type DOIDs, timeline vocabulary), the MTB app's cancer-type-specific terminology needs colorectal entries, e.g. the preset actionable filter, oncogenicity prediction, and the tumor-type crosswalk. | Bob, 2026-11-09 |
+| D18 | **For TCGA studies, the GDC clinical record supplements cBioPortal.** For every TCGA patient, harvest the **whole** NCI Genomic Data Commons case record (demographics, all diagnoses with treatments and pathology details, follow-ups with molecular tests and other clinical attributes, exposures, family histories, biospecimens down to slides and aliquots, annotations), not a chosen subset; use is decided at mapping time (as D10). Pinned by saving the response with the GDC data release (46.0 at first harvest). cBioPortal stays the primary source (one format across all studies; curated PanCancer genomics); where both hold a value, the mapping states which wins. See "GDC clinical supplement". | Bob, 2026-11-09 |
+| D19 | **Gaps are filled with plausible values for most patients; a seeded fraction is deliberately messy** (resolves Q6). Values a real record would have but the source lacks (ECOG, labs, allergies, encounters) are generated by rule, seeded per patient. A seeded fraction of patients (default 15%) is left messy (some of: missing ECOG or labs, a drug coded as text only, a missing encounter), flagged in the run CSV so the mess is known. | Bob, 2026-11-10 |
+| D20 | **Fusions go to the FHIR bundle only, not to the genomics server** (updates D5, resolves Q12 for now). Each reported fusion is an mCODE GenomicVariant per mCODE "Fusion Events" (https://hl7.org/fhir/us/mcode/group-genomics.html#fusion-events): two `gene-studied` components and a `molecular-consequence` component = `gene_fusion` **SO:0001565** (the mCODE page prints "SO:001565", a typo; checked in the Sequence Ontology). No SV records in Mongo, so `dnaChangeType` doesn't list SVs. See `docs/mapping.md` "Fusions". | Bob, 2026-11-10 |
+| D21 | **Genomic records: native build, PASS calls, VEP annotation** (resolves Q8 and the molecular-consequence question). (a) A test's variants use the same genome build as the test: the study's native build (GRCh37 for TCGA), in Mongo and in the FHIR report alike. (b) Only mutations with `FILTER` = PASS. (c) Molecular consequences come from the **Ensembl VEP REST API** (GRCh37 endpoint, RefSeq transcripts), with the MANE Select transcript identified from NCBI's MANE list: no local install, so others can run the code easily. | Bob, 2026-11-10 |
+| D22 | **Simple synthetic pathology and imaging reports, for now.** Each patient gets a pathology report for the resection or biopsy and imaging reports at diagnosis and at each progression, as DiagnosticReports whose text is filled from a template using only data we already map (so they agree with the rest of the record). Not yet used: the real TCGA pathology report PDFs (open in GDC; scanned, OCR text, much richer: size, grade, margins, nodes, clinical biomarker tests), which could later be extracted (an LLM step run by maintainers); and imaging AI findings (Q16). | Bob, 2026-11-10 |
+| D23 | **Patient selection: living patients only.** A patient who died during TCGA follow-up (a `DECEASED` status event) isn't selected: a tumor board for them would fall after their death, and changing the record to avoid that isn't wanted. LUAD: 182 of the 514 usable patients died, leaving ~330. | Bob, 2026-11-11 |
 
 ## Target MongoDB records (from the Google Doc schema)
 
@@ -59,7 +80,7 @@ The two parts must describe the same patient and the same tests, following the c
 | patientID | 1..1 | MRN |
 | testDate | 1..1 | synthetic, on the shifted timeline |
 | testID | 1..1 | `<MRN>-T<n>` |
-| specimenID | 1..1 | `<MRN>-Sp<n>`, one per cBioPortal sample |
+| specimenID | 1..1 | the TCGA/cBioPortal sample ID (e.g. `TCGA-J2-8194-01`), one per sample (mapping decision 4) |
 | genomicBuild | 1..1 | the study's reference genome (TCGA PanCancer Atlas is GRCh37) |
 | studiedRegion | 1..1 | a BedID for a BED we generate from the panel, kit or assay (see "Test metadata") |
 | uncallableRegion | 0..1 | a BedID where derivable; probably omitted at first |
@@ -143,6 +164,30 @@ Three stages:
 
 Cell-line and PDX studies stay out because they're never selected.
 
+## GDC clinical supplement (D18)
+
+**Why:** cBioPortal's TCGA clinical tables are a curated subset of the original TCGA clinical record. The NCI Genomic Data Commons (GDC, part of the Cancer Research Data Commons) holds the full record, joined by the same patient ID (`submitter_id` = the TCGA ID = our MRN). Checked 2026-11-09 for `TCGA-J2-8194` and across the 585 TCGA-LUAD cases (Data Release 46.0):
+
+| In GDC, not in cBioPortal (LUAD) | Coverage |
+|---|---|
+| Laterality | ~510 patients (TCGA-J2-8194: right) |
+| Other cancers with type: prior, synchronous and subsequent primaries; metastasis and recurrence diagnosis records | 75 prior, 24 synchronous, 13 subsequent; 82 metastasis, 66 recurrence records (TCGA-J2-8194: prior breast cancer) |
+| Year of diagnosis | most patients (TCGA-J2-8194: 2011); bears on Q15 |
+| Smoking status and pack-years | ~510 |
+| ECOG / Karnofsky performance status | ~225 / ~125; real values instead of synthetic (Q6) |
+| Clinical biomarker tests (gene, positive/negative) | KRAS 62, EGFR 24; coarse ("Mutation, NOS"); must be checked against the WES calls |
+| Progression evidence (e.g. biopsy-confirmed), per-regimen treatment outcome, surgery at distant site | where recorded |
+| Central vs. peripheral tumor location | 191 |
+| Lung function (FEV1, DLCO) | some patients |
+| Biospecimens: tumor, **blood-normal** and tissue-normal samples; slide-level pathology (% tumor cells, lymphocytes, necrosis) | all; the blood-normal sample is the matched normal of the tumor/normal test (GenomicStudyAnalysis, D12) |
+| Annotations (curator free text) | some |
+
+**Still missing in GDC:** the recurrence/metastasis **site** (`progression_or_recurrence_anatomic_site` is "not reported" for all 184 LUAD patients who have the field), and family history (empty for LUAD). These stay rule-filled (D11) or come from imaging.
+
+**How:** `synthgen.harvest.gdc` fetches the case with every entity expanded and saves `gdc_case.json` beside the patient's cBioPortal extract, with the data release and retrieval date. Not for non-TCGA studies.
+
+**Precedence:** cBioPortal for the curated PanCancer genomics and the shared clinical attributes; GDC for clinical detail cBioPortal lacks. Where both hold the same fact (stage, dates, treatments), the mapping names the winner and the run report logs disagreements.
+
 ## Scope: what not to port yet (proposal)
 
 In the pinned snapshot, but not extracted or ported to FHIR or Mongo for now:
@@ -185,7 +230,7 @@ Some results a tumor board expects aren't in the source studies. Where a value m
 | `tcga_kirc` | 537 | CT 237, **MRI 62** | same |
 | `tcga_gbm` | 607 | none in this IDC index (TCIA's TCGA-GBM MRI is a separate collection, to check) | same |
 
-In `luad_tcga_pan_can_atlas_2018`, cBioPortal links slides for 514 patients and radiology for 62. All 17 patients with actionable fusions (ALK, RET, ROS1, MET) have slides; only `TCGA-50-8460` also has radiology (chest CT).
+In `luad_tcga_pan_can_atlas_2018`, cBioPortal links slides for 514 patients and radiology for 62, but 32 of the 62 are the near-empty `TCGA-17-Z…` patients (see "Data quirks" in `docs/mapping.md`), so **radiology is usable for 30 patients**, all of whom also have slides. All 17 patients with actionable fusions (ALK, RET, ROS1, MET) have slides; only `TCGA-50-8460` also has radiology (chest CT).
 
 **How IDC is accessed:**
 - **Find:** the `idc-index` Python package ships a local index of all IDC DICOM series, queried with SQL. One row per series gives PatientID (= the TCGA patient ID = our MRN, D4), modality, StudyInstanceUID / SeriesInstanceUID, study date, size, licence and the bucket URL. BigQuery offers the same metadata in more depth, but needs a Google Cloud project.
@@ -290,6 +335,12 @@ output:
 
 **Packaging:** `pip install` from GitHub works for pure Python. If the pipeline needs non-Python tools (e.g. snpEff, which is Java, for molecular consequences), a **Docker image** spares users from installing them. To decide once the tool list is known.
 
+**Readiness must be explicit (placeholder, Bob 2026-11-11).** Users need to know exactly which studies and conversions are ready and what the caveats are. To do:
+- **Main README:** a "Supported studies" table (study, status, what was verified, known limitations), kept current; plus general caveats (synthetic filler, rule-filled values such as metastasis sites and PD-L1, treatment era Q15, Genomics Reporting version mix Q18, report vs. Genomics Explorer differences).
+- **Per study:** what "supported" required: clinical attributes and timeline vocabulary checked; crosswalks complete (sites, histologies, metastasis sites, CIViC tumor-type DOIDs, MTB app terminology); data quirks handled; a varied test set built and validated. Probably in `studies/<study_id>/study.yaml` plus a short notes section.
+- **The tool enforces it:** `synthgen run` refuses unsupported studies and patients a study can't support (e.g. deceased, D23), with the reason.
+- **Moving to a new study is prep work, not a switch:** the README should say so.
+
 **Open questions:**
 - **Who are the users?** CodeX participants, implementers, other projects? Their technical level sets how much the config can assume.
 - **Same patient, same synthetic person?** The seed depends only on the MRN, so two users who pick `TCGA-50-8460` get the identical synthetic patient (name, dates, PD-L1). Good for reproducibility; but if users load into a shared server, or want variety, an optional **user seed** mixed into the MRN seed would give each user different filler. MRNs would then need a user-specific prefix to stay unique on a shared server.
@@ -338,12 +389,14 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
 
   - Excluded: MSK-IMPACT studies, incl. MSK-CHORD and MSK-MET (panels, D13); AACR GENIE (panels; not in public datahub; own terms).
   - **Proposed second family:** `pog570_bcgsc_2020`, to exercise WGS (whole-gene studied regions, Q14) and a different institution's clinical conventions.
+  - **Within TCGA, attribute names are uniform but timeline vocabulary isn't** (checked 2026-11-09 across all 32 studies). 56 of 60 clinical attributes appear in every study. But the status timeline's `ANATOMIC_SITE` column (metastasis or recurrence site) exists in 24 studies and is **absent in 8, including LUAD, LUSC and COADREAD**; and event names vary by cancer type (e.g. liver "Intrahepatic/Extrahepatic Recurrence"; prostate "Bone Scan", "Diagnostic MRI", "First Biochemical Recurrence"; cervical and LGG "Performance Status Assessment"). So the TCGA clinical mapping is shared, but each cancer type needs its own timeline crosswalk entries.
+  - **Consequence for LUAD and COADREAD:** recurrence and metastasis events have dates but no site in cBioPortal. The GDC record (D18) supplies the types of prior, synchronous and subsequent primaries, but not metastasis sites either; those are filled by rule (D11), or from imaging for patients with scans.
   - Still to do for the chosen studies: count patients with actionable variants in the 228 reportable genes, and set the patient selection criteria (e.g. actionable variants, treatment history present).
 - ~~Q2. VCF route (a) or direct records (b)~~: decided, direct records (D15).
 - ~~Q3. MRN scheme~~: decided, D4.
 - ~~Q4. Copy number and fusions~~: included (D5); the mapping is covered in the mapping discussion.
 - **Q5. Tests per patient.** One test per cBioPortal sample (primary and metastasis become two tests)? Add a synthetic germline test, or stay somatic only?
-- **Q6. Clinical depth (all generated by rule, D11).** Clinical attributes only, or also timeline data (treatments, labs) where the study has it? Which synthetic filler do we generate (names, address, encounters, practitioner), and do we fill gaps the source lacks (e.g. ECOG, labs) with plausible values or leave them absent? **To come back to.** Bob's thoughts so far (2026-11-08):
+- ~~Q6. Clinical depth~~: decided, D19. *(Original discussion kept below.)* **Q6. Clinical depth (all generated by rule, D11).** Clinical attributes only, or also timeline data (treatments, labs) where the study has it? Which synthetic filler do we generate (names, address, encounters, practitioner), and do we fill gaps the source lacks (e.g. ECOG, labs) with plausible values or leave them absent? **To come back to.** Bob's thoughts so far (2026-11-08):
   - **Fill** fields that a real record would generally have (e.g. ECOG).
   - **But** some messy data, closer to the real world, helps test how robustly the Case Summary and other consumers render gaps and oddities.
   - **Possible middle ground** (not decided): fill realistically by default, and leave a seeded fraction of patients deliberately messy (missing values, unmapped codes, free-text-only items), flagged in the run CSV so the mess is known.
@@ -359,11 +412,12 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
   - treat the history as past and focus the demo on the tumor board's next-step recommendation
 - **Q16. Where the imaging AI pipeline lives** (Bob, 2026-11-09: to come back to): in this repository or in the MTB app? Either way this repository supplies the downloaded images, key images and FHIR pointers (see "Imaging").
 - **Q17. Image rendering in the MTB app** (Bob, 2026-11-09: to come back to): key images plus a link to IDC's viewer, or a full interactive viewer in the app from the start? See "Imaging" options (a)–(c).
+- ~~Q18. Genomics Reporting 2.0.0 vs 3.0.0~~: **decided (Bob, 2026-11-10): keep the mix.** Everything follows Genomics Reporting 2.0.0 (mCODE 4.0.0, the MTB app, the Operations server) except GenomicStudy, GenomicStudyAnalysis and the report's `genomic-study-reference` extension (3.0.0). Validate with both IGs loaded; the cross-version errors on the 2.0.0 implication code are expected. Known effect: the MTB app shows both Procedures on the treatment timeline (GenomicStudyAnalysis as an unlabeled "Procedure"); Bob is tracking an app tweak to skip them.
 - **Q13. Error tolerance.** Where is the line between "minor: load and log" and "serious: skip the patient"? Proposed starting point: anything that breaks loading, the Operations or report/server consistency is serious; unmapped codes, missing optional fields and validator warnings are minor.
 - ~~Q7. Genetic reports in FHIR~~: yes, filtered to the 228 reportable genes (D6).
-- **Q8. Genome build.** Keep the study's native build (GRCh37 for TCGA), or lift over to GRCh38 so all new patients use one build?
+- ~~Q8. Genome build~~: decided, D21. *(Original:)* **Q8. Genome build.** Keep the study's native build (GRCh37 for TCGA), or lift over to GRCh38 so all new patients use one build?
 - ~~Q9. Where the code lives~~: `rhdolin/synthetic-data-generator` (D8). Still open: one script per step or a single driver. With direct records (D15), no pipeline fixes in genomics-operations are needed for now.
-- **Q12. Fusions: to revisit (Bob, 2026-11-08).** Fusions are important for treatment decisions (e.g. ALK, ROS1, RET, NTRK, FGFR2), but today they are **neither in Mongo nor in our FHIR**: no Mongo schema, no Operations support, and none in the demo bundles. A dedicated discussion will decide how to represent them in Mongo, in the Operations and in the FHIR report, and whether the cBioPortal fusions wait until then. Until it's resolved, other structural variants and copy number go ahead under D5.
+- **Q12. Fusions** — *for now: D20 (FHIR bundle only).* Original question: **Fusions: to revisit (Bob, 2026-11-08).** Fusions are important for treatment decisions (e.g. ALK, ROS1, RET, NTRK, FGFR2), but today they are **neither in Mongo nor in our FHIR**: no Mongo schema, no Operations support, and none in the demo bundles. A dedicated discussion will decide how to represent them in Mongo, in the Operations and in the FHIR report, and whether the cBioPortal fusions wait until then. Until it's resolved, other structural variants and copy number go ahead under D5.
 
   **Findings from `luad_tcga_pan_can_atlas_2018` (2026-11-09):**
   - **The SV records look like RNA-seq fusion calls.** All 1,493 records have `tumorSplitReadCount` (reads crossing the junction) and `tumorPairedEndReadCount` (read pairs with a mate in each gene), the two kinds of evidence RNA fusion callers such as STAR-Fusion report. Most also give the frame (`in-frame` / `frameshift`), and `eventInfo` reads like "EML4-ALK fusion". `dnaSupport`/`rnaSupport` are empty and the study's README doesn't name the source; likely the TCGA PanCancer fusion analysis (RNA-seq). **To confirm.** This means TCGA "SVs" are mostly expressed fusions, not DNA rearrangements, which also affects how they map under D5.
