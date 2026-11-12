@@ -4,6 +4,21 @@ One document for all mappings, as implemented (2026-11-12): clinical, treatments
 
 **Mapped here but not implemented yet:** drug dose and route; radiation dose and the recorded treatment site (`ANATOMIC_TREATMENT_SITE`; rule T3 is always used); Karnofsky; a second primary for `New Primary Tumor` events; GDC's coarse clinical gene tests (e.g. "KRAS Positive"; only CEA and MMR IHC are ported); the distant-site biopsy Procedure; GDC treatment rows as a cross-check; fraction genome altered; and the automated report-vs-Operations-server consistency checks.
 
+# Differences from the hand-built MTB cases
+
+The MTB app's own cases (HCC1143, L2345, MRN1234, TCGA-DD-A1EH) follow `genomics-apps/mtb-app/clinical-data/README.md` in genomics-operations. Generated patients follow the same conventions (MRN identifier system, `mtb-<mrn>-…` ids, the `mtb-demo` tag, a display on every coding, structured genomics reports in the server's CIViC shape, the 228 reportable genes), except:
+
+| MTB case README | Generated patients | Why |
+|---|---|---|
+| MRN identifier `use` `usual`, type display "Medical Record Number" | `use` `official`, display "Medical record number" | The official v2-0203 display is "Medical record number" |
+| Patient id `mtb-<mrn>` | `mtb-<mrn>-patient` | Cosmetic; the app finds patients by the MRN identifier |
+| Genomic data loaded from VCFs (`vcfPrepper` → `run_vcf2json` → `to_mongo`); Tests point to a BED for the test | Mongo records written directly, molecular consequences from VEP; Tests point to the server's default WES BEDs | D15, D21, G2 |
+| A build script and scenario file per case | None: one generator, with build notes and a run report | D11 |
+| Genetic report: region studied, variants, implications | Also copy number, fusions (mCODE fusion form), **GenomicStudy and GenomicStudyAnalysis**, TMB, MSI, PD-L1 (lung), CEA and MMR IHC (colorectal) | D12, D20, "Colorectal". The four hand-built cases have no GenomicStudy |
+| Implication phenotype: Disease Ontology | Also NCIt `C9292` for tumor-agnostic "Solid Tumor" evidence | "Therapeutic implications" |
+| Validation: frameshift p.HGVS the only known exception | Also the cross-version implication code and tx.fhir.org HGVS outages | Q18 |
+| `dnaChangeType` lists exactly the types on the server | The FHIR GenomicStudyAnalysis also lists `gene_fusion`; the server holds no fusions | D20 |
+
 # Clinical: TCGA PanCancer Atlas → FHIR (mCODE 4.0.0)
 
 **Status: draft 2, 2026-11-09** (adds the GDC clinical supplement, design D18). Scope: `data_clinical_patient.txt`, `data_clinical_sample.txt`, `data_timeline_status.txt`, `data_timeline_sample_acquisition.txt`, and the GDC case record (`gdc_case.json`, §7).
@@ -136,7 +151,7 @@ All tumor markers: `effectiveDateTime` = the genomic test date: 10–21 days (se
 | `diagnoses[primary].site_of_resection_or_biopsy` | `Lung, NOS` | input | Cross-check with the resection Procedure |
 | `exposures[Tobacco].tobacco_smoking_status` | `Current Reformed Smoker for > 15 yrs` | US Core smoking status Observation: LOINC `72166-2` "Tobacco smoking status" ✓, value SNOMED `8517006` "Ex-smoker" ✓ | Crosswalk of GDC smoking values → SNOMED; effective = D(0) |
 | `exposures[Tobacco].pack_years_smoked`, `tobacco_smoking_onset_year`, `tobacco_smoking_quit_year` | 20; 1956; 1982 | Observation LOINC `8664-5` "Cigarettes smoked total (pack per year) - Reported" ✓ = 20 `{pack-years}`; quit year as a component or note | SNOMED `401201003` "Cigarette pack-years" ✓ is the alternative code. Calendar years are shifted with the patient's date shift (decision 7) |
-| `follow_ups.ecog_performance_status`, `karnofsky_performance_status` | (none for this patient) | `mcode-ecog-performance-status` (LOINC `89247-1` ✓, `valueInteger`), `mcode-karnofsky-performance-status` | Real values where present (~225 LUAD patients); otherwise synthetic per Q6 |
+| `follow_ups.ecog_performance_status`, `karnofsky_performance_status` | (none for this patient) | `mcode-ecog-performance-status` (LOINC `89247-1` ✓, `valueInteger`), `mcode-karnofsky-performance-status` | Real values where present (~225 LUAD patients); otherwise synthetic per D19 |
 | `follow_ups.molecular_tests` (gene, `test_result`, `variant_type`) | (none for this patient; e.g. TCGA-50-5935: KRAS Positive, EGFR Positive) | `mcode-tumor-marker-test` or a simple lab Observation: "KRAS mutation, positive" | Coarse prior clinical tests. **Check against the WES calls**: port as recorded with a note, and log disagreements (decision 8). **Not implemented yet** for gene tests; colorectal CEA and MMR IHC are ported (see "Colorectal") |
 | `follow_ups.other_clinical_attributes` (FEV1, DLCO) | FEV1 83% predicted, DLCO 59% predicted | Lab Observations (LOINC to choose) | Useful for surgery/radiation fitness; lower priority |
 | `follow_ups[progression]` (`days_to_progression`, `progression_or_recurrence_type`, `evidence_of_progression_type`) | 470, Distant, Biopsy with Histologic Confirmation | §4 disease status evidence-type extension; a biopsy Procedure | Agrees with the cBioPortal event at day 470 |
