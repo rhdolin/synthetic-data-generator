@@ -1,7 +1,7 @@
 """Build a patient's mCODE transaction bundle from a TCGA PanCancer extract + GDC record.
 
-Implements docs/mapping.md: "Clinical", "Treatments" and "Clinical: synthetic content".
-Not yet included: GenomicStudy, the genomics report, PD-L1 (genomic mapping pending).
+Implements docs/mapping.md: "Clinical", "Treatments", "Clinical: synthetic content" and the rules in
+"Colorectal" that apply to every study; reports, genomics and image links are added by clinical.genomics.
 
 Usage:
     python -m synthgen.clinical.tcga luad_tcga_pan_can_atlas_2018 TCGA-J2-8194 --tumor-board 2026-12-01

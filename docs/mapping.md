@@ -1,12 +1,14 @@
 # Mapping: cBioPortal (+ GDC) → FHIR and Mongo
 
-One document for all mappings. Sections: clinical (below), treatments and genomic (to come), and the data quirks that affect mapping (at the end).
+One document for all mappings, as implemented (2026-11-12): clinical, treatments, synthetic content, reports and image links, genomic → Mongo, the genomics report, therapeutic implications, fusions, the colorectal additions, and the data quirks of each study (at the end). Worked examples are lung (`luad_tcga_pan_can_atlas_2018`); colorectal differences are in "Colorectal".
+
+**Mapped here but not implemented yet:** drug dose and route; radiation dose and the recorded treatment site (`ANATOMIC_TREATMENT_SITE`; rule T3 is always used); Karnofsky; a second primary for `New Primary Tumor` events; GDC's coarse clinical gene tests (e.g. "KRAS Positive"; only CEA and MMR IHC are ported); the distant-site biopsy Procedure; GDC treatment rows as a cross-check; fraction genome altered; and the automated report-vs-Operations-server consistency checks.
 
 # Clinical: TCGA PanCancer Atlas → FHIR (mCODE 4.0.0)
 
-**Status: draft 2, 2026-11-09** (adds the GDC clinical supplement, design D18). Scope: `data_clinical_patient.txt`, `data_clinical_sample.txt`, `data_timeline_status.txt`, `data_timeline_sample_acquisition.txt`, and the GDC case record (`gdc_case.json`, §7). Treatments (`data_timeline_treatment.txt`) come next, in their own section.
+**Status: draft 2, 2026-11-09** (adds the GDC clinical supplement, design D18). Scope: `data_clinical_patient.txt`, `data_clinical_sample.txt`, `data_timeline_status.txt`, `data_timeline_sample_acquisition.txt`, and the GDC case record (`gdc_case.json`, §7).
 
-**Family:** the 32 `*_tcga_pan_can_atlas_2018` studies share these attribute names (see design Q1). Timeline vocabulary differs by cancer type; this draft is written against `luad_tcga_pan_can_atlas_2018`.
+**Family:** the 32 `*_tcga_pan_can_atlas_2018` studies share these attribute names (see design Q1). Timeline vocabulary differs by cancer type; written against `luad_tcga_pan_can_atlas_2018`, with colorectal differences in "Colorectal".
 
 **Worked example:** `TCGA-J2-8194` ([cBioPortal](https://www.cbioportal.org/patient?studyId=luad_tcga_pan_can_atlas_2018&caseId=TCGA-J2-8194)). Every "example" value below is this patient's real value.
 
@@ -89,8 +91,8 @@ Value crosswalks (TCGA strings → SNOMED AJCC qualifiers) live in the code for 
 | Event (`STATUS`) | Example | Target | Notes |
 |---|---|---|---|
 | `Initial Diagnosis` (day 0) | stage IIb, t3 n0 mx, 7th | §2, §3 | Staging duplicate; used only as a check |
-| `Distant Metastasis` | day 470 | `mcode-secondary-cancer-condition` (onset D(470), `condition-related` → primary) **and** `mcode-cancer-disease-status` at D(470), value `271299001` "Patient's condition worsened" | **Site isn't in cBioPortal or GDC** → chosen by rule, seeded per patient (decision 3). GDC adds how it was confirmed (`gdc:follow_ups.evidence_of_progression_type` = "Biopsy with Histologic Confirmation") and a surgery at a distant site at day 518 → a biopsy/resection Procedure. Code e.g. `94391008` "Metastatic malignant neoplasm to lung" pattern |
-| `Locoregional Recurrence` | — | `mcode-cancer-disease-status` (worsened); a recurrence Condition is optional | |
+| `Distant Metastasis` | day 470 | `mcode-secondary-cancer-condition` (onset D(470), `condition-related` → primary) **and** `mcode-cancer-disease-status` at D(470), value `271299001` "Patient's condition worsened" | **Site isn't in cBioPortal, and GDC rarely names it** → chosen by rule, seeded per patient (decision 3), unless GDC names it. GDC adds how it was confirmed (`gdc:follow_ups.evidence_of_progression_type` = "Biopsy with Histologic Confirmation") and a surgery at a distant site at day 518 → a biopsy/resection Procedure. Code e.g. `94391008` "Metastatic malignant neoplasm to lung" pattern |
+| `Locoregional Recurrence` (colorectal: `Locoregional Disease`) | — | `mcode-cancer-disease-status` (worsened) and an imaging report | No recurrence Condition. Colorectal's `Metastatic` is treated as `Distant Metastasis`. Recurrences that only GDC dates are added (see "Colorectal": rules for every study) |
 | `New Primary Tumor` | — | a second `mcode-primary-cancer-condition` | Type from GDC (`classification_of_tumor` = subsequent/synchronous primary, `tissue_or_organ_of_origin`) when present; else rule |
 | `Last Follow Up` | day 724: `TUMOR_STATUS` With Tumor, `PRIMARY_THERAPY_OUTCOME_SUCCESS` Progressive Disease, `VITAL_STATUS` Alive | `mcode-cancer-disease-status` at D(724), value worsened | Supports "active" status. Evidence-type extension as in the TCGA-DD-A1EH bundle |
 | `DECEASED` | (not this patient) | `Patient.deceasedDateTime` = D(day) | |
@@ -135,7 +137,7 @@ All tumor markers: `effectiveDateTime` = the genomic test date: 10–21 days (se
 | `exposures[Tobacco].tobacco_smoking_status` | `Current Reformed Smoker for > 15 yrs` | US Core smoking status Observation: LOINC `72166-2` "Tobacco smoking status" ✓, value SNOMED `8517006` "Ex-smoker" ✓ | Crosswalk of GDC smoking values → SNOMED; effective = D(0) |
 | `exposures[Tobacco].pack_years_smoked`, `tobacco_smoking_onset_year`, `tobacco_smoking_quit_year` | 20; 1956; 1982 | Observation LOINC `8664-5` "Cigarettes smoked total (pack per year) - Reported" ✓ = 20 `{pack-years}`; quit year as a component or note | SNOMED `401201003` "Cigarette pack-years" ✓ is the alternative code. Calendar years are shifted with the patient's date shift (decision 7) |
 | `follow_ups.ecog_performance_status`, `karnofsky_performance_status` | (none for this patient) | `mcode-ecog-performance-status` (LOINC `89247-1` ✓, `valueInteger`), `mcode-karnofsky-performance-status` | Real values where present (~225 LUAD patients); otherwise synthetic per Q6 |
-| `follow_ups.molecular_tests` (gene, `test_result`, `variant_type`) | (none for this patient; e.g. TCGA-50-5935: KRAS Positive, EGFR Positive) | `mcode-tumor-marker-test` or a simple lab Observation: "KRAS mutation, positive" | Coarse prior clinical tests. **Check against the WES calls**: port as recorded with a note, and log disagreements (decision 8) |
+| `follow_ups.molecular_tests` (gene, `test_result`, `variant_type`) | (none for this patient; e.g. TCGA-50-5935: KRAS Positive, EGFR Positive) | `mcode-tumor-marker-test` or a simple lab Observation: "KRAS mutation, positive" | Coarse prior clinical tests. **Check against the WES calls**: port as recorded with a note, and log disagreements (decision 8). **Not implemented yet** for gene tests; colorectal CEA and MMR IHC are ported (see "Colorectal") |
 | `follow_ups.other_clinical_attributes` (FEV1, DLCO) | FEV1 83% predicted, DLCO 59% predicted | Lab Observations (LOINC to choose) | Useful for surgery/radiation fitness; lower priority |
 | `follow_ups[progression]` (`days_to_progression`, `progression_or_recurrence_type`, `evidence_of_progression_type`) | 470, Distant, Biopsy with Histologic Confirmation | §4 disease status evidence-type extension; a biopsy Procedure | Agrees with the cBioPortal event at day 470 |
 | `diagnoses[*].treatments` (`treatment_outcome`, `therapeutic_agents`, …) | Docetaxel → Stable Disease | treatment mapping (next draft) | GDC and cBioPortal treatment rows should match; GDC adds outcome per regimen and surgery rows |
@@ -177,16 +179,16 @@ All tumor markers: `effectiveDateTime` = the genomic test date: 10–21 days (se
 
 ## Drugs → `MedicationRequest` (`mcode-cancer-related-medication-request`)
 
-One MedicationRequest per drug. Drugs that start on the same day form one regimen.
+One MedicationRequest per drug. Drugs are grouped into lines of therapy by rule T5.
 
 | Source | Target | Transform / notes |
 |---|---|---|
-| `AGENT` / `gdc:therapeutic_agents` | `medicationCodeableConcept`: RxNorm ingredient | Crosswalk (all ✓ via RxNav, 2026-11-10): cisplatin 2555, carboplatin 40048, pemetrexed 68446, paclitaxel 56946, gemcitabine 12574, docetaxel 72962, erlotinib 337525, vincristine 11202, etoposide 4179, bevacizumab 253337, vinorelbine 39541, gefitinib 328134, zoledronic acid 77655, vinblastine 11198, irinotecan 51499, nivolumab 1597876, topotecan 57308, cyclophosphamide 3002, belinostat 1543543, cyanocobalamin (vitamin B12) 11248, pegfilgrastim 338036, denosumab 993449. Unmappable agents (`Nos`, blank, `Placebo`, trial products such as `Recprame + As15`): text only |
+| `AGENT` / `gdc:therapeutic_agents` | `medicationCodeableConcept`: RxNorm ingredient | Crosswalk (all ✓ via RxNav, 2026-11-10): cisplatin 2555, carboplatin 40048, pemetrexed 68446, paclitaxel 56946, gemcitabine 12574, docetaxel 72962, erlotinib 337525, vincristine 11202, etoposide 4179, bevacizumab 253337, vinorelbine 39541, gefitinib 328134, zoledronic acid 77655, vinblastine 11198, irinotecan 51499, nivolumab 1597876, topotecan 57308, cyclophosphamide 3002, belinostat 1543543, cyanocobalamin (vitamin B12) 11248, pegfilgrastim 338036, denosumab 993449; colorectal drugs in "Colorectal". Unmappable agents (`Nos`, blank, `Placebo`, trial products such as `Recprame + As15`): text only |
 | `START_DATE`, `STOP_DATE` | `dosageInstruction.timing.repeat.boundsPeriod` start D(start), end D(stop); `authoredOn` = D(start) | Missing stop: rule T1 |
-| same patient + same `START_DATE` | `groupIdentifier` = `<mrn>-regimen-<n>` (n in date order) | GDC lists the same drugs; used as a cross-check |
+| line of therapy (rule T5) | `groupIdentifier` = `<mrn>-regimen-<n>` (n = the line, in date order) | |
 | `THERAPY_ONGOING`, stop date, response | `status`: `active` (ongoing at last follow-up and not superseded), `stopped` (stopped for progression), else `completed` | `intent` = `order` |
 | `MEASURE_OF_RESPONSE` / `gdc:treatment_outcome` = progressive disease | `statusReason`: SNOMED `266721009` "Absent response to treatment" ✓ | From mCODE's termination-reason value set |
-| `REGIMEN_INDICATION` | `treatmentIntent` extension: `373808002` "Curative - procedure intent" or `363676003` "Palliative - procedure intent" (mCODE value set) | Adjuvant → curative; Palliative, Recurrence, Progression → palliative. **Empty (most rows) → by rule:** started after the primary treatment and before the first recurrence/metastasis → curative; after → palliative. Supportive drugs (zoledronic acid, denosumab, pegfilgrastim, cyanocobalamin) → `399707004` "Supportive - procedure intent" |
+| `REGIMEN_INDICATION` | `treatmentIntent` extension: `373808002` "Curative - procedure intent" or `363676003` "Palliative - procedure intent" (mCODE value set) | Adjuvant → curative; Palliative, Recurrence, Progression → palliative. **Empty (most rows) → by rule:** started after the primary treatment and before the first recurrence/metastasis → curative; after → palliative. Supportive drugs (zoledronic acid, denosumab, pegfilgrastim, cyanocobalamin, filgrastim, dexamethasone) → `399707004` "Supportive - procedure intent" |
 | `NUMBER_OF_CYCLES` | `dosageInstruction.timing.repeat.count` | When present |
 | `PRESCRIBED_DOSE` + `_UNITS` | `dosageInstruction.doseAndRate.doseQuantity` (UCUM: mg, mg/m2, mg/kg, mg/d) | `auc` (carboplatin AUC) → text in `dosageInstruction.text`, not a quantity |
 | `ROUTE_OF_ADMINISTRATION` | `dosageInstruction.route`: IV `47625008` ✓, PO `26643006` ✓, IM `78421000` ✓ | |
@@ -226,7 +228,7 @@ One Procedure per `Radiation n` row.
 
 - **T1 — ongoing but superseded** (agreed, Bob 2026-11-10): a regimen marked ongoing with no stop date, followed by a later regimen (TCGA-J2-8194's adjuvant carboplatin/pemetrexed). Proposed end: start + cycles × 21 days (4 cycles if unknown), capped at the day before the next treatment; status `completed`. A regimen still ongoing at last follow-up with nothing after it stays `active` with no end.
 - **T2 — radiation type unknown** (agreed): assume external-beam photons (by far the most common).
-- **T3 — radiation site unknown** (agreed): before any recurrence → the primary tumor site; after → the metastasis site.
+- **T3 — radiation site unknown** (agreed): before any recurrence → the primary tumor site (lung: "Structure of lobe of lung"; colorectal: the primary's body site); after → the metastasis site.
 - **T5 — lines of therapy** (agreed, Bob 2026-11-12): combined agents ("A + B") are split when each is a known drug; the same drug on the same day (e.g. fluorouracil bolus + infusion) is one; supportive drugs never start a line; a drug starting within 30 days of a line's start joins that line (e.g. cetuximab added to FOLFIRI, carboplatin swapped for cisplatin).
 - **T4 — request vs. administration** (agreed): `MedicationRequest` only, as in the existing MTB cases. `MedicationAdministration` is for documenting an actual administration (e.g. inpatient); infused chemo blurs that line, so revisit if the demo ever needs per-dose records.
 
@@ -265,7 +267,7 @@ Not generated: comorbidities, medications other than cancer treatment, family hi
 | `issued` | 3–5 days later (seeded) |
 | `specimen` | the tumor Specimen |
 | `result` | the pathologic stage group Observation |
-| `conclusion` | Template: "{SITE}, {PROCEDURE}: Invasive {histology}. Pathologic stage (AJCC {edition} edition): {pT} {pN}{ pM}." TCGA-J2-8194: "Lung, right lower lobe, resection: Invasive adenocarcinoma with mixed subtypes. Pathologic stage (AJCC 7th edition): pT3 pN0." (Grade added when present; MX omitted, decision 2.) |
+| `conclusion` | Template (colorectal: "{site}, {procedure}: …", e.g. "Cecum, right hemicolectomy: Invasive adenocarcinoma. Pathologic stage (AJCC 7th edition): pT3 pN2b pM1b."): "{SITE}, {PROCEDURE}: Invasive {histology}. Pathologic stage (AJCC {edition} edition): {pT} {pN}{ pM}." TCGA-J2-8194: "Lung, right lower lobe, resection: Invasive adenocarcinoma with mixed subtypes. Pathologic stage (AJCC 7th edition): pT3 pN0." (Grade added when present; MX omitted, decision 2.) |
 
 **Available later, not used now:** the real report (GDC PDF) says right lower *lobectomy*, 4 cm, grade 1/4, visceral pleura and diaphragm invasion, 0/10 nodes, negative margins, and a clinical KRAS G12C / EGFR wild-type test (Clarient).
 
@@ -273,9 +275,11 @@ Not generated: comorbidities, medications other than cancer treatment, family hi
 
 | When | `code` (LOINC) | Template `conclusion` |
 |---|---|---|
-| **Staging at diagnosis**: D(0) − 3…14 days (seeded) | `24627-2` "CT Chest" ✓ | "{laterality} {lobe} lung mass, consistent with primary lung malignancy. No evidence of distant metastatic disease." (A stage IV patient: the metastasis is described instead) |
+| **Staging at diagnosis**: D(0) − 3…14 days (seeded) | lung: `24627-2` "CT Chest" ✓; colorectal: `72254-6` CT chest, abdomen and pelvis | "{laterality} {lobe} lung mass, consistent with primary lung malignancy." / "{site} mass, consistent with primary colorectal malignancy." Then "No evidence of distant metastatic disease.", or for pM1 at diagnosis "{Site} lesion(s), consistent with metastatic disease." |
 | **Each metastasis or recurrence event**: on the event date | by the (rule-filled) site: bone → `39818-0` "NM Whole body Bone Views" ✓; brain → `24590-2` "MR Brain" ✓; liver, adrenal, lung → `72254-6` "CT Chest and Abdomen and Pelvis W contrast IV" ✓ | "New {site} lesion(s), consistent with metastatic disease." |
 | **Radiographic progression** (treatment response "radiographic progressive disease") | `72254-6` CT chest, abdomen and pelvis ✓ | "Interval progression of disease." |
+| **Recurrence** (locoregional or type unknown) | `72254-6` ✓ | "Locoregional recurrence at the {site}." / "Findings consistent with recurrent disease." |
+| **Progression at an existing metastatic site** | `72254-6` ✓ | "Progression of {site} metastatic disease." |
 | **Restaging before the tumor board** if the last status is "with tumor": the last follow-up date | `72254-6` ✓ | "Persistent/progressive {sites} disease." |
 
 All: `category` LOINC `LP29684-5` "RAD" ✓; `status` final; `issued` same day; `performer` the radiologist; `subject`. For TCGA-J2-8194: CT chest before diagnosis; bone scan at day 470 (her rule-filled metastasis is bone; she also has a real nuclear-medicine study in IDC); restaging CT at day 724.
@@ -286,7 +290,7 @@ Researchers want to point imaging AI at the metastasis and progression scans, so
 - **Pathology report → slide study** (`DiagnosticReport.imagingStudy`).
 - **Radiology by the real gaps between scans** (study dates from IDC's DICOMweb service): scans within 90 days of the patient's first scan are the staging workup → the staging report; only clearly later scans → the metastasis/progression/restaging reports, in date order; extra scans to the last report. TCGA radiology is almost all pre-surgery baseline, so most metastasis/progression reports get no image (LUAD: only TCGA-38-6178's progression report, a PET/CT 4.5 months after the first scan). A nuclear-medicine study goes to a bone-scan report only if its description says bone.
 - **ImagingStudy** per real study: `identifier` `urn:dicom:uid` / `urn:oid:<StudyInstanceUID>`; `modality` (DICOM: CT, PT, NM, SM); `series` UIDs; `started` = the linked report's date on the shifted timeline (not the DICOM date); `note` with the IDC viewer URL and the real DICOM study date (what the viewer shows); `endpoint` → one shared `Endpoint/nci-idc-dicomweb` (DICOMweb, IDC's viewer proxy).
-- Examples: TCGA-50-8459's real CT → staging report, PET/CT → recurrence report; TCGA-J2-8194's lung perfusion scan → staging report.
+- Examples: TCGA-50-8459's CT and PET/CT (two weeks apart) → staging report; TCGA-38-6178's PET/CT 4.5 months after its first scan → progression report; TCGA-J2-8194's lung perfusion scan → staging report.
 
 # Genomic: cBioPortal → Mongo records (D2, D3, D15, D21)
 
@@ -385,7 +389,7 @@ None generated: TCGA WES tests use the server's existing `Default.WES.GRCh37.bed
 | `effectiveDateTime` / `issued` | the test date (Tests `testDate`); issued 7–14 days later (seeded) |
 | `specimen` | the tumor Specimen (the blood normal is referenced from GenomicStudyAnalysis) |
 | `performer` | the synthetic pathologist |
-| `result` | the region-studied Observation, every reported variant, every therapeutic implication, TMB and MSI |
+| `result` | the region-studied Observation, every reported variant, every therapeutic implication, TMB, MSI and (lung) PD-L1 |
 | extension `genomic-study` | → the GenomicStudy |
 | `conclusion` | Template: "Tumor whole-exome sequencing (reported genes: 228-gene panel): {variant list, gene + p. or 'amplification' or 'fusion'}. {MSI status}; TMB {n} mutations/Mb. {for each implication: gene change: {implication} to {drug} in {disease} (level {X})}." TCGA-J2-8194: "…KRAS p.Gly12Cys, STK11 p.Lys146*, KEAP1 p.Glu540Argfs*32, XRCC1 p.Val326Leu, CSF1R p.Ala354Asp, MED12 p.Arg1462Cys; PDGFRA and KIT amplification. Microsatellite stable; TMB 4.8 mutations/Mb. KRAS p.Gly12Cys: sensitivity to sotorasib…" |
 
@@ -425,9 +429,11 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 | Resource | Content |
 |---|---|
 | **GenomicStudy** (Procedure, `genomic-study`) | `status` completed; `code` whole-exome sequencing (text "Whole exome sequencing"); `identifier` = testID; `performedDateTime` = test date; `reasonReference` → primary cancer; `genomic-study-analysis` extension → the analysis; performer a synthetic lab (Organization) |
-| **GenomicStudyAnalysis** (Procedure, `genomic-study-analysis`) | `genome-build` `LA14029-5` GRCh37; `change-type` the test's `dnaChangeType` as SO codes; `genomic-source-class` somatic; `specimen` → tumor **and** blood normal; `regions.studied` = the 228 HGNC genes (Q14); `regions.description` "Whole-exome sequencing; reported genes listed"; `method-type` sequencing |
+| **GenomicStudyAnalysis** (Procedure, `genomic-study-analysis`) | `genome-build` `LA14029-5` GRCh37; `change-type` the test's `dnaChangeType` as SO codes, plus `gene_fusion` when a fusion is reported (see "Fusions"); `genomic-source-class` somatic; `specimen` → tumor **and** blood normal; `regions.studied` = the 228 HGNC genes (Q14); `regions.description` "Whole-exome sequencing; reported genes listed"; `method-type` sequencing |
 
 ## PD-L1 (design "Derived clinical values"; R3)
+
+Lung only; none for colorectal.
 
 | Element | Value |
 |---|---|
@@ -449,8 +455,8 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 **Rule** (Bob, 2026-11-10):
 1. **Evidence:** predictive, accepted, direction "supports", **level A or B** only.
 2. **Variant match:** the CIViC molecular profile matches a reported variant: gene + protein change (e.g. "KRAS G12C"); **exon-level categories** derived from the MAF exon and type ("EGFR Exon 19 Deletion" for an in-frame deletion in exon 19, "… Exon N Insertion", "MET Exon 14 Skipping Mutation" for MET splice-site calls); "GENE Amplification"; fusions as "A::B Fusion" or partner-agnostic "v::B Fusion" / "A::v Fusion". **"A OR B" profiles** match if any part matches; profiles with AND / NOT never match (conditions we can't check). Gene-level "GENE Mutation" only when nothing more specific matches (and only for protein-changing variants).
-3. **Same tumor type:** the evidence's disease is the patient's tumor type. For LUAD: lung adenocarcinoma, non-small cell lung carcinoma or lung cancer (DOID 3910, 3908, 1324); not other cancers. **Tumor-agnostic evidence** ("Cancer", DOID:162, or "Solid Tumor") also counts, **at level A only** (Bob, 2026-11-12): the tissue-agnostic approvals (larotrectinib/entrectinib for NTRK fusions, selpercatinib for RET, dabrafenib + trametinib for BRAF V600E); the many gene-level level-B pan-cancer items (e.g. TP53 mutation → VEGF inhibitors) are left out, and tumor-agnostic evidence never matches on the gene-level part of a profile. **Per patient, one resistance implication per drug** (Bob, 2026-11-12), from the strongest evidence (level, then marketed, then CIViC rating); colorectal has anti-EGFR resistance evidence for many genes, which otherwise repeats cetuximab per variant (e.g. "v::RET Fusion OR RET Mutation" needs the RET fusion, not any RET mutation). Associated phenotype codes for tumor-agnostic evidence, so the MTB app can recognize it: "Cancer" → DOID:162; "Solid Tumor" (no DOID in CIViC) → NCIt `C9292` Solid Neoplasm (system `http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl`).
-4. **Per variant: at most 2 sensitivity therapies**, highest level first, **plus resistance evidence** (the highest-level resistance item, if any). Ties at the same level (Bob, 2026-11-10): **a therapy available in the US beats an experimental one**, checked in RxNorm: every drug in the therapy has marketed clinical-drug products (SCD/SBD) via RxNav; an experimental drug has none (often not in RxNorm at all). If still tied, **include both**; an extra implication is fine.
+3. **Same tumor type:** the evidence's disease is the patient's tumor type. For LUAD: lung adenocarcinoma, non-small cell lung carcinoma or lung cancer (DOID 3910, 3908, 1324); not other cancers. **Tumor-agnostic evidence** ("Cancer", DOID:162, or "Solid Tumor") also counts, **at level A only** (Bob, 2026-11-12): the tissue-agnostic approvals (larotrectinib/entrectinib for NTRK fusions, selpercatinib for RET, dabrafenib + trametinib for BRAF V600E); the many gene-level level-B pan-cancer items (e.g. TP53 mutation → VEGF inhibitors) are left out, and tumor-agnostic evidence never matches on the gene-level part of a profile (e.g. "v::RET Fusion OR RET Mutation" needs the RET fusion, not any RET mutation). Colorectal DOIDs: see "Colorectal". Associated phenotype codes for tumor-agnostic evidence, so the MTB app can recognize it: "Cancer" → DOID:162; "Solid Tumor" (no DOID in CIViC) → NCIt `C9292` Solid Neoplasm (system `http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl`).
+4. **Per variant: at most 2 sensitivity therapies**, highest level first, **plus resistance evidence** (the highest-level resistance item, if any). Then, **per patient, one resistance implication per drug** (Bob, 2026-11-12), from the strongest evidence (level, then marketed, then CIViC rating): colorectal has anti-EGFR resistance evidence for many genes, which otherwise repeats cetuximab per variant. Ties at the same level (Bob, 2026-11-10): **a therapy available in the US beats an experimental one**, checked in RxNorm: every drug in the therapy has marketed clinical-drug products (SCD/SBD) via RxNav; an experimental drug has none (often not in RxNorm at all). If still tied, **include both**; an extra implication is fine.
 5. **Drugs** to RxNorm via RxNav; combinations listed together.
 
 **Example, KRAS G12C (CIViC, checked 2026-11-10):** sensitivity: sotorasib (EID9431, level A, NSCLC; 6 marketed products) and, at level B, docetaxel + selumetinib (EID1142, NSCLC; both marketed), which beats divarasib (EID11652, level B; no RxNorm entry, experimental); resistance: gefitinib (EID2257, level B, lung cancer). Note: the rule picks by CIViC's level and availability only; it doesn't judge whether later trials superseded an item (docetaxel + selumetinib's phase III trial was reportedly negative), so the report reflects CIViC as of the pinned release.
@@ -515,7 +521,7 @@ Same mapping as lung, with these colorectal crosswalks (codes checked on tx.fhir
 Found by reading every file of the snapshot (2026-11-09). The ones that affect mapping or patient selection:
 
 1. **52 `TCGA-17-Z0nn` patients** have no clinical, timeline, CNA, SV or RNA data, and all their mutations are `FILTER=wga`. They should be excluded from patient selection; 32 of them account for half the radiology links.
-2. **13% of MAF rows are not `PASS`** (`wga`, `oxog`, `common_in_exac`, `nonpreferredpair`). Decide the filter policy.
+2. **13% of MAF rows are not `PASS`** (`wga`, `oxog`, `common_in_exac`, `nonpreferredpair`). Decided: PASS only (D21).
 3. **SV coordinates are labelled GRCh37 but fit GRCh38**, and the calls look like RNA fusions (Q12). Mutations and segments are genuinely GRCh37/hg19.
 4. **Four "sequenced" samples have no mutation rows** (`TCGA-64-1678-01`, `TCGA-69-8453-01`, `TCGA-78-7143-01`, `TCGA-86-A4D0-01`).
 5. **Coverage differs by file:** 566 clinical / 562 mutations / 511 CNA / 510 RNA and SV-profiled / 500 segments / 492 ancestry and sample acquisition / 456 HM450 (case list says 459) / 360 RPPA.
@@ -525,7 +531,7 @@ Found by reading every file of the snapshot (2026-11-09). The ones that affect m
 9. **`FORM_COMPLETION_DATE` is the only calendar date** (2010–2014, three formats including day `00`). It's an upper bound on the real diagnosis era, possibly useful for Q15.
 10. **Missing tokens differ by file** (`''`, `NA`, `.`, single space); no bracketed TCGA tokens.
 11. **Empty columns:** `WEIGHT`, `PRIMARY_LYMPH_NODE_PRESENTATION_ASSESSMENT`, `GRADE`, and several treatment columns; MAF `Hotspot` is all 0 and ExAC columns are empty.
-12. **No fraction genome altered** in this study, although the design plans to port it.
+12. **No fraction genome altered** in this study; not ported.
 13. **`TISSUE_SOURCE_SITE_CODE` lost leading zeros** (`5` for `05`).
 14. **Hypoxia file has no meta file** and uses the older 5-row header; its patients equal the RNA-seq set.
 15. **Root `data_normals_*` files** are legacy copies of the adjacent-normal expression with tumor (`-01`) sample IDs and no meta file; use `normals/` if ever needed.
@@ -535,3 +541,17 @@ Found by reading every file of the snapshot (2026-11-09). The ones that affect m
 19. **MAF:** `t_depth` ≠ ref + alt in 31% of rows; `Transcript_ID` ≠ `Feature` in 20%; `Entrez_Gene_Id` = 0 in 10,492 rows; 1 duplicate row.
 20. **Segment file uses chromosome `23` for X**; the MAF uses `X`.
 21. **Loading lessons (2026-11-11):** the public HAPI server rejects a *new* resource whose content duplicates an existing one, so shared things (the genomic lab) are one Organization with a fixed id (`mtb-synthetic-genomics-lab`), not a copy per patient. The CNA matrix's repeated gene symbols (17) must be de-duplicated per patient before writing CNV records (one `_id` per gene).
+
+# Data quirks: `coadread_tcga_pan_can_atlas_2018` (datahub `a8ea891`)
+
+Found while profiling and building the colorectal cohort (2026-11-12):
+
+1. **Timeline wording differs from lung:** status events are `Metastatic` and `Locoregional Disease` (lung: `Distant Metastasis`, `Locoregional Recurrence`), and only 18 eligible patients have one. **GDC dates 117 recurrences** (93 of unknown type), so GDC events are added (see "Colorectal"); 37 GDC recurrences have no date and are skipped.
+2. **MMR IHC "loss of all four proteins"** (16 patients, all microsatellite stable, 12 from one site): a data-entry error; not ported.
+3. **The two MSI scores disagree** for 24 patients (MSIsensor vs MANTIS): reported as indeterminate (decision 6).
+4. **Treatment rows:** the same drug twice on the same day (fluorouracil bolus + infusion), combined agents in one row ("Leucovorin + Fluorouracil + Oxaliplatin"), add-on drugs weeks into a regimen (cetuximab), and supportive drugs (pegfilgrastim): handled by rule T5. GDC's `treatment_intent_type` can be wrong (TCGA-CM-6675's second-line FOLFIRI is "Adjuvant").
+5. **Odd sites:** three patients have site C80.9, C49.4 or blank; not selected.
+6. **CEA** is a preoperative value with no date: dated before surgery by rule.
+7. **AJCC edition** `2ND` (1 patient) and blank (49): the method is given as text.
+8. **`GRADE` is NA** for every sample.
+9. **Only 17 eligible patients have CT** in IDC, and only one complex patient (TCGA-G4-6315); slides for all.
