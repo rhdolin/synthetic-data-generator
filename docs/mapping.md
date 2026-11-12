@@ -118,7 +118,7 @@ Treatment `MEASURE_OF_RESPONSE` values (e.g. "clinical progressive disease" at d
 | Source column | Example | `code` (LOINC) | Value | Notes |
 |---|---|---|---|---|
 | `TMB_NONSYNONYMOUS` | `4.83` | `94076-7` Mutations/Megabase [# Ratio] in Tumor | `valueQuantity` 4.8, unit `1/10*6` "mutations/Mb" | Rounded to 1 decimal |
-| `MSI_SENSOR_SCORE`, `MSI_SCORE_MANTIS` | `0.02`, `0.313` | `81695-9` Microsatellite instability [Interpretation] | `LA14122-8` "Stable" | Interpreted with the header's thresholds (MSIsensor: >10 MSI-H, 4–10 indeterminate; MANTIS: >0.6 MSI-H, 0.4–0.6 indeterminate). If the two disagree, MSIsensor decides (decision 6) |
+| `MSI_SENSOR_SCORE`, `MSI_SCORE_MANTIS` | `0.02`, `0.313` | `81695-9` Microsatellite instability [Interpretation] | `LA14122-8` "Stable" | Interpreted with the header's thresholds (MSIsensor: >10 MSI-H, 4–10 indeterminate; MANTIS: >0.6 MSI-H, 0.4–0.6 indeterminate). A call only when both agree; otherwise indeterminate (decision 6). Answers: `LA14122-8` Stable, `LA26203-2` MSI-H, `LA11884-6` Indeterminate |
 | `ANEUPLOIDY_SCORE`, `TBL_SCORE`, hypoxia scores | 15, 22, … | — | | Research scores; no clinical use |
 | *(missing)* fraction genome altered | | — | | Not in this study (inventory quirk); compute from segments or drop |
 | *(derived)* PD-L1 | | see design "Derived clinical values" | | From *CD274* RNA |
@@ -152,7 +152,7 @@ All tumor markers: `effectiveDateTime` = the genomic test date: 10–21 days (se
 3. ~~Metastasis site~~: **decided: fill by rule**, seeded per patient, from typical spread for the cancer type (LUAD: brain, bone, liver, adrenal, contralateral lung). Imaging can override it for patients with scans.
 4. ~~Specimen IDs~~: **decided: the TCGA sample ID (e.g. `TCGA-J2-8194-01`) is the specimen ID** in both FHIR and Mongo `specimenID`; FHIR Specimens only for the tumor and the blood normal (the two the test used).
 5. ~~Resection procedure code~~: **decided: as precise as the data allows**; a broader resection code is fine when the data doesn't say more.
-6. ~~MSIsensor vs MANTIS~~: **decided: MSIsensor decides** when they disagree.
+6. ~~MSIsensor vs MANTIS~~: **decided (revised by Bob, 2026-11-12): a call only when both agree; otherwise indeterminate.** (Was: MSIsensor decides. No LUAD patient built so far changes; 24 colorectal patients become indeterminate.)
 7. ~~Calendar years in GDC~~: **decided: shift them** by the patient's date shift, like every other date (birth, diagnosis, treatments, smoking onset/quit), so ages and intervals stay true to the source.
 8. ~~Clinical tests that disagree with WES~~: **decided: port as recorded, with a note**, and log the disagreement in the run report.
 
@@ -227,6 +227,7 @@ One Procedure per `Radiation n` row.
 - **T1 — ongoing but superseded** (agreed, Bob 2026-11-10): a regimen marked ongoing with no stop date, followed by a later regimen (TCGA-J2-8194's adjuvant carboplatin/pemetrexed). Proposed end: start + cycles × 21 days (4 cycles if unknown), capped at the day before the next treatment; status `completed`. A regimen still ongoing at last follow-up with nothing after it stays `active` with no end.
 - **T2 — radiation type unknown** (agreed): assume external-beam photons (by far the most common).
 - **T3 — radiation site unknown** (agreed): before any recurrence → the primary tumor site; after → the metastasis site.
+- **T5 — lines of therapy** (agreed, Bob 2026-11-12): combined agents ("A + B") are split when each is a known drug; the same drug on the same day (e.g. fluorouracil bolus + infusion) is one; supportive drugs never start a line; a drug starting within 30 days of a line's start joins that line (e.g. cetuximab added to FOLFIRI, carboplatin swapped for cisplatin).
 - **T4 — request vs. administration** (agreed): `MedicationRequest` only, as in the existing MTB cases. `MedicationAdministration` is for documenting an actual administration (e.g. inpatient); infused chemo blurs that line, so revisit if the demo ever needs per-dose records.
 
 # Clinical: synthetic content (D11, D19)
@@ -448,7 +449,7 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 **Rule** (Bob, 2026-11-10):
 1. **Evidence:** predictive, accepted, direction "supports", **level A or B** only.
 2. **Variant match:** the CIViC molecular profile matches a reported variant: gene + protein change (e.g. "KRAS G12C"); **exon-level categories** derived from the MAF exon and type ("EGFR Exon 19 Deletion" for an in-frame deletion in exon 19, "… Exon N Insertion", "MET Exon 14 Skipping Mutation" for MET splice-site calls); "GENE Amplification"; fusions as "A::B Fusion" or partner-agnostic "v::B Fusion" / "A::v Fusion". **"A OR B" profiles** match if any part matches; profiles with AND / NOT never match (conditions we can't check). Gene-level "GENE Mutation" only when nothing more specific matches (and only for protein-changing variants).
-3. **Same tumor type:** the evidence's disease is the patient's tumor type. For LUAD: lung adenocarcinoma, non-small cell lung carcinoma or lung cancer (DOID 3910, 3908, 1324); not other cancers, and not pan-cancer ("Cancer", "Solid Tumor").
+3. **Same tumor type:** the evidence's disease is the patient's tumor type. For LUAD: lung adenocarcinoma, non-small cell lung carcinoma or lung cancer (DOID 3910, 3908, 1324); not other cancers. **Tumor-agnostic evidence** ("Cancer", DOID:162, or "Solid Tumor") also counts, **at level A only** (Bob, 2026-11-12): the tissue-agnostic approvals (larotrectinib/entrectinib for NTRK fusions, selpercatinib for RET, dabrafenib + trametinib for BRAF V600E); the many gene-level level-B pan-cancer items (e.g. TP53 mutation → VEGF inhibitors) are left out. Associated phenotype codes for tumor-agnostic evidence, so the MTB app can recognize it: "Cancer" → DOID:162; "Solid Tumor" (no DOID in CIViC) → NCIt `C9292` Solid Neoplasm (system `http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl`).
 4. **Per variant: at most 2 sensitivity therapies**, highest level first, **plus resistance evidence** (the highest-level resistance item, if any). Ties at the same level (Bob, 2026-11-10): **a therapy available in the US beats an experimental one**, checked in RxNorm: every drug in the therapy has marketed clinical-drug products (SCD/SBD) via RxNav; an experimental drug has none (often not in RxNorm at all). If still tied, **include both**; an extra implication is fine.
 5. **Drugs** to RxNorm via RxNav; combinations listed together.
 
@@ -480,7 +481,34 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 
 **Reciprocal pairs** (Bob, 2026-11-11): cBioPortal lists the two breakpoints of one rearrangement as two rows (CD74-ROS1 and ROS1-CD74); they become **one** fusion, oriented with the driver or reportable gene as the 3′ partner (CD74-ROS1, EML4-ALK, CCDC6-RET).
 
+**GenomicStudy** (Bob, 2026-11-12): for a patient with a reported fusion, the GenomicStudyAnalysis adds change type `gene_fusion` (SO:0001565), since mCODE reports fusions as DNA variants. FHIR only: Mongo `dnaChangeType` is unchanged (no fusion records, D20). Interim: the fusion calls are probably from RNA-seq, and a separate project is defining an RNA variant profile.
+
 **Which fusions are reported** (decided, Bob 2026-11-10): a fusion goes in the report if **either partner is one of the 228 reportable genes** (D6). In-frame is not required. TCGA-J2-8194's only fusion, AGPAT3-APP, has neither gene, so this patient's report has no fusion.
+
+# Colorectal: `coadread_tcga_pan_can_atlas_2018` (D17)
+
+Same mapping as lung, with these colorectal crosswalks (codes checked on tx.fhir.org and RxNav, 2026-11-12):
+
+| Item | Source | FHIR |
+|---|---|---|
+| Primary cancer code | OncoTree `COAD`/`READ`/`MACR` + ICD-O-3 site | **by site**: C18.x `1701000119104` Primary adenocarcinoma of colon; C19 `425178004` Adenocarcinoma of rectosigmoid junction; C20 `254582000` Adenocarcinoma of rectum. Mucinous (`MACR`, 8480/3) is carried by the histology extension |
+| ICD-10-CM | `ICD_10` | C18.0–C18.9, C19, C20 as-is (WHO and CM agree) |
+| Body site | `ICD_O_3_SITE` | cecum, appendix, ascending, hepatic flexure, transverse, splenic flexure, descending, sigmoid, colon, rectosigmoid junction, rectum (SNOMED body structures) |
+| Histology | `ICD_O_3_HISTOLOGY` | adds 8263/3 tubulovillous, 8211/3 tubular, 8010/3 carcinoma NOS |
+| Staging | AJCC T/N/stage | adds pTis, pT4a, pT4b; pN1a/b/c, pN2a/b; IIC, III, IIIC, IVA, IVB |
+| Surgery | `METHOD_OF_SAMPLE_PROCUREMENT` | right/left hemicolectomy (Right/Left colectomy), sigmoid, transverse, total colectomy, anterior resection of rectum, abdominoperineal resection |
+| Metastasis site (rule) | — | liver (weighted ×2), lung, peritoneum, distant lymph node |
+| Drugs | `AGENT` | adds fluorouracil, leucovorin, oxaliplatin, capecitabine, irinotecan, cetuximab, panitumumab, aflibercept, regorafenib, mitomycin, floxuridine, raltitrexed; filgrastim and dexamethasone are supportive |
+| CIViC tumor type | | colorectal DOIDs 9256, 0050861, 219, 234, 1520, 3029, 3033, 1993, 1996 |
+| PD-L1 | | **none** for colorectal (Bob, 2026-11-12): MSI drives immunotherapy |
+
+**Disease course and markers (agreed, Bob 2026-11-12; apply to every study):**
+- **Metastatic at diagnosis (pM1):** a metastasis Condition at diagnosis (site rule-filled), and the staging CT reports it.
+- **Recurrences from GDC:** dated `progression_or_recurrence` follow-ups that cBioPortal's timeline lacks (more than 30 days from any it has) become events: Distant → metastasis; Locoregional → locoregional recurrence; type unknown → metastasis if pM1 at diagnosis, else recurrence. GDC's site is used when given (e.g. Liver). Undated ones are noted and skipped. Recurrences get a "worsened" disease status and an imaging report. A distant event at a site that already has a metastasis is recorded as its progression.
+- **CEA:** GDC's preoperative CEA (ng/mL) → `mcode-tumor-marker-test` LOINC `2039-6`, dated a few days before surgery (rule).
+- **MMR IHC:** GDC's MLH1/MSH2/MSH6/PMS2 → LOINC `81691-8`/`81692-6`/`81693-4`/`81694-2`, Present `LA9633-4` / Absent `LA9634-2`, on the tumor specimen. **Loss of all four is not ported**: all 16 TCGA colorectal cases with that pattern are microsatellite stable (data quirk; real dMMR shows MLH1+PMS2 or MSH2+MSH6 loss). Other disagreements with MSI: ported with a note (decision 8).
+
+**Cohort (Bob, 2026-11-12):** about 30 patients, mostly complex (metastatic or recurrent, treated); plus a few MSI-high and BRAF V600E patients even if simpler; always TCGA-A6-2674 (NTRK3 fusion); a couple of WNT (TCGA-CM-6675 CTNNB1 T41I, TCGA-AD-6965 VTI1A::TCF7L2) and hedgehog patients (TCGA-CM-4747 SMO L515P, TCGA-G4-6304 PTCH1).
 
 # Data quirks: `luad_tcga_pan_can_atlas_2018` (datahub `a8ea891`)
 

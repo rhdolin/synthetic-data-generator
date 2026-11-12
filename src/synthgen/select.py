@@ -49,7 +49,7 @@ def candidates(snapshot: Path, study: dict, cache_dir: Path = Path("data/cache")
     doids = civic.TUMOR_TYPE_DOIDS.get(study["oncotree"], set())
     evidence = {r["molecular_profile"] for r in civic.release_rows()
                 if r["evidence_type"] == "Predictive" and r["evidence_status"] == "accepted"
-                and r["evidence_direction"] == "Supports" and r["evidence_level"] in ("A", "B") and r["doid"] in doids}
+                and r["evidence_direction"] == "Supports" and r["evidence_level"] in ("A", "B") and civic.same_tumor_type(r, doids)}
     actionable = defaultdict(set)
     with open(snapshot / "data_mutations.txt", newline="") as fh:
         for m in csv.DictReader((l for l in fh if not l.startswith("#")), delimiter="\t"):
@@ -88,7 +88,7 @@ def candidates(snapshot: Path, study: dict, cache_dir: Path = Path("data/cache")
         if not (t.get("AGENT") or "").startswith("Radiation"):
             regimens[t["PATIENT_ID"]].add(t["START_DATE"])
     events = Counter(s["PATIENT_ID"] for s in _rows(snapshot / "data_timeline_status.txt")
-                     if any(x in s["STATUS"] for x in ("Recurrence", "Metastasis", "New Primary")))
+                     if any(x in s["STATUS"] for x in ("Recurrence", "Metastasis", "New Primary", "Metastatic", "Locoregional")))
     rna_list = (snapshot / "case_lists" / "cases_RNA_Seq_v2_mRNA.txt").read_text() if (snapshot / "case_lists" / "cases_RNA_Seq_v2_mRNA.txt").exists() else ""
     out = []
     for pid, p in sorted(patients.items()):
@@ -104,7 +104,7 @@ def candidates(snapshot: Path, study: dict, cache_dir: Path = Path("data/cache")
             "features": sorted(f for f, on in {
                 "actionable_variant": bool(actionable[pid]), "fusion": bool(fusions[pid]),
                 "imaging": bool(img), "radiology": bool(img - {"IDC_SLIM"}),
-                "treatment_timeline": bool(regimens[pid]), "recurrence_or_metastasis": bool(events[pid]),
+                "treatment_timeline": bool(regimens[pid]), "recurrence_or_metastasis": bool(events[pid]) or (p.get("PATH_M_STAGE") or "").upper().startswith("M1"),
                 "prior_cancer": (p.get("PRIOR_DX") or "").startswith("Yes"), "rna": f"{pid}-01" in rna_list,
             }.items() if on),
         })

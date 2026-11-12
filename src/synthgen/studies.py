@@ -24,4 +24,20 @@ SUPPORTED = {
             "Bundles mix Genomics Reporting 2.0.0 (mCODE) and 3.0.0 (GenomicStudy) (Q18).",
         ],
     },
+    "coadread_tcga_pan_can_atlas_2018": {
+        "name": "Colorectal Adenocarcinoma (TCGA, PanCancer Atlas)",
+        "datahub_commit": "a8ea891da32add81fabaa8e744cf8cb72a8a0e66",
+        "oncotree": "COADREAD",
+        "builder": "tcga",
+        "status": "in development (milestone 4)",
+        "verified": "",
+        "caveats": [
+            "Eligible: living patients with clinical data (471 of 594; D23).",
+            "Metastasis sites are rule-filled unless GDC names one.",
+            "Recurrences come from GDC where cBioPortal's timeline lacks them.",
+            "No PD-L1 (not standard in colorectal; MSI drives immunotherapy).",
+            "MMR IHC showing loss of all four proteins is treated as a data error and not ported.",
+            "Treatments are 2005-2013 practice shifted to the present (Q15).",
+        ],
+    },
 }

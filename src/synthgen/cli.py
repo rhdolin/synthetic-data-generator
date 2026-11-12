@@ -82,8 +82,9 @@ def validate(bundle: Path, validator: Path) -> tuple[int, int]:
     for line in out.read_text().splitlines():
         if ": Error - " in line:
             errors += 1
-            if any(k in line for k in ("predicted-therapeutic-implication", "varnomen", "hgvs-vs", "request timed out")):
-                known += 1  # cross-version implication code; tx.fhir.org HGVS limits and timeouts
+            if any(k in line for k in ("predicted-therapeutic-implication", "varnomen", "hgvs-vs", "request timed out",
+                                           "Error parsing HGVS response")):
+                known += 1  # cross-version implication code; tx.fhir.org HGVS limits, timeouts and outages
     return errors, known
 
 

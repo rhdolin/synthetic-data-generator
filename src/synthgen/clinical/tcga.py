@@ -38,12 +38,17 @@ class Builder:
         self.mongo: dict = {}
         self.pt = read_rows(extract_dir / "data_clinical_patient.txt")[0]
         self.sample = read_rows(extract_dir / "data_clinical_sample.txt")[0]
-        self.status = read_rows(extract_dir / "data_timeline_status.txt")
         self.treat = read_rows(extract_dir / "data_timeline_treatment.txt")
         self.acq = read_rows(extract_dir / "data_timeline_sample_acquisition.txt")
         gdc_path = extract_dir / "gdc_case.json"
         self.gdc = json.loads(gdc_path.read_text())["case"] if gdc_path.exists() else {}
         self.mrn = self.pt["PATIENT_ID"]
+        self.notes: list[str] = []  # rule-filled or flagged choices, for the run report
+        self.m1 = (self.pt.get("PATH_M_STAGE") or "").upper().startswith("M1")
+        self.colorectal = self.sample.get("ONCOTREE_CODE") in F.COLORECTAL
+        self.gdc_met_site: dict[int, str] = {}
+        self.progressed: dict[int, str] = {}  # day -> site of an existing metastasis that progressed
+        self.status = self.disease_events(read_rows(extract_dir / "data_timeline_status.txt"))
         self.key = self.mrn.lower()
         self.board = tumor_board
         last = max([int(self.pt.get("DAYS_LAST_FOLLOWUP") or 0)]
@@ -53,7 +58,6 @@ class Builder:
         self.d0 = syn.diagnosis_date(self.mrn, tumor_board, last)
         self.messy = syn.messy_kinds(self.mrn)
         self.resources: list[dict] = []
-        self.notes: list[str] = []  # rule-filled or flagged choices, for the run report
 
     # --- helpers -------------------------------------------------------------------
     def D(self, day) -> str:
@@ -74,6 +78,35 @@ class Builder:
             if d.get("diagnosis_is_primary_disease") or d.get("classification_of_tumor") == "primary":
                 return d
         return {}
+
+    STATUS_NAMES = {"Metastatic": "Distant Metastasis", "Locoregional Disease": "Locoregional Recurrence"}  # colorectal wording
+
+    def disease_events(self, status: list[dict]) -> list[dict]:
+        """cBioPortal status events (wording normalized), plus dated recurrences/progressions that only GDC records
+        (decision, Bob 2026-11-12). Type unknown: progression if metastatic at diagnosis, else a recurrence."""
+        for e in status:
+            e["STATUS"] = self.STATUS_NAMES.get(e["STATUS"], e["STATUS"])
+        known = [int(e["START_DATE"]) for e in status if any(x in e["STATUS"] for x in ("Metastasis", "Recurrence"))]
+        for f in self.gdc.get("follow_ups", []):
+            if f.get("progression_or_recurrence") != "Yes":
+                continue
+            day = f.get("days_to_recurrence") if f.get("days_to_recurrence") is not None else f.get("days_to_progression")
+            if day is None:
+                self.notes.append("GDC recurrence without a date: not placed on the timeline")
+                continue
+            day = int(day)
+            if any(abs(day - k) <= 30 for k in known):
+                continue
+            kind = f.get("progression_or_recurrence_type")
+            name = ("Locoregional Recurrence" if kind == "Locoregional"
+                    else "Distant Metastasis" if kind == "Distant" or self.m1 else "Recurrence")
+            status.append({"PATIENT_ID": self.mrn, "START_DATE": str(day), "STATUS": name})
+            known.append(day)
+            site = f.get("progression_or_recurrence_anatomic_site")
+            if not blank(site):
+                self.gdc_met_site[day] = site
+            self.notes.append(f"{name.lower()} at day {day}: from GDC (type {kind or 'unknown'})")
+        return sorted(status, key=lambda e: int(e["START_DATE"] or 0))
 
     @property
     def subject(self) -> dict:
@@ -149,8 +182,8 @@ class Builder:
     def primary_cancer(self):
         p, s, g = self.pt, self.sample, self.gdc_primary()
         lat = g.get("laterality") if g.get("laterality") in F.LATERALITY else None
-        onco = F.ONCOTREE[s["ONCOTREE_CODE"]]
-        icd = F.icd10cm_lung(p.get("ICD_10") or "", lat)
+        onco = F.primary_code(s["ONCOTREE_CODE"], p.get("ICD_O_3_SITE") or "")
+        icd = F.icd10cm(p.get("ICD_10") or "", lat)
         code = {"coding": [F.coding(F.SCT, *onco)], "text": s.get("TUMOR_TYPE") or s.get("CANCER_TYPE_DETAILED")}
         if icd:
             code["coding"].append(F.coding(F.ICD10CM, *icd))
@@ -207,7 +240,7 @@ class Builder:
                                F.sct(F.AJCC_T[t], f"p{t[0]}{t[1:].lower()} (AJCC)".replace("pT1a", "pT1a"))))
         if n in F.AJCC_N:
             members.append(obs("tnm-pathologic-n", "mcode-tnm-regional-nodes-category", ("21900-6", "Regional lymph nodes.pathology [Class] Cancer"),
-                               F.sct(F.AJCC_N[n], f"p{n.upper()} (AJCC)")))
+                               F.sct(F.AJCC_N[n], f"p{n[:2]}{n[2:].lower()} (AJCC)")))
         if m in F.AJCC_M:
             members.append(obs("tnm-pathologic-m", "mcode-tnm-distant-metastases-category", ("21901-4", "Distant metastases.pathology [Class] Cancer"),
                                F.sct(F.AJCC_M[m], f"pM1{m[2:].lower()} (AJCC)")))
@@ -292,24 +325,36 @@ class Builder:
         if not existing:
             self.add(r)
 
+    def metastasis(self, day: int):
+        sites = F.metastasis_sites(self.sample["ONCOTREE_CODE"])
+        real = F.GDC_MET_SITE.get(self.gdc_met_site.get(day, ""))
+        cond, struct = real or syn.rng(self.mrn, f"met-site-{day}").choice(sites)
+        if any(r["id"].startswith(self.rid("metastasis-")) and r["code"]["coding"][0]["code"] == cond[0] for r in self.resources):
+            self.progressed[day] = F.site_word(struct[1])  # same site again: progression of that metastasis
+            self.notes.append(f"distant event at day {day}: progression of the existing {F.site_word(struct[1])} metastasis")
+            return
+        self.add(F.resource(
+            "Condition", self.rid(f"metastasis-d{day}"), "mcode-secondary-cancer-condition",
+            extension=[F.ext("http://hl7.org/fhir/StructureDefinition/condition-related", "valueReference", self.primary_ref)],
+            clinicalStatus=F.cc(F.COND_CLINICAL, "active", "Active"),
+            verificationStatus=F.cc(F.COND_VER, "confirmed", "Confirmed"),
+            category=[F.cc(F.COND_CAT, "problem-list-item", "Problem List Item")],
+            code=F.sct(*cond), bodySite=[F.sct(*struct)], subject=self.subject,
+            onsetDateTime=self.D(day), recordedDate=self.D(day)))
+        self.notes.append(f"metastasis site at day {day}: " + ("from GDC" if real else "rule-filled") + f" ({cond[1]})")
+
     def disease_course(self):
         progress = {f.get("days_to_progression"): f for f in self.gdc.get("follow_ups", []) if f.get("days_to_progression") is not None}
+        if self.m1:  # metastatic at diagnosis (pM1): the metastasis is part of the initial picture, not a progression
+            self.metastasis(0)
         for s in self.status:
             day = int(s["START_DATE"])
             if "Distant Metastasis" in s["STATUS"]:
-                sites = F.METASTASIS_SITES[self.sample["ONCOTREE_CODE"]]
-                cond, struct = syn.rng(self.mrn, f"met-site-{day}").choice(sites)
-                self.add(F.resource(
-                    "Condition", self.rid(f"metastasis-d{day}"), "mcode-secondary-cancer-condition",
-                    extension=[F.ext("http://hl7.org/fhir/StructureDefinition/condition-related", "valueReference", self.primary_ref)],
-                    clinicalStatus=F.cc(F.COND_CLINICAL, "active", "Active"),
-                    verificationStatus=F.cc(F.COND_VER, "confirmed", "Confirmed"),
-                    category=[F.cc(F.COND_CAT, "problem-list-item", "Problem List Item")],
-                    code=F.sct(*cond), bodySite=[F.sct(*struct)], subject=self.subject,
-                    onsetDateTime=self.D(day), recordedDate=self.D(day)))
-                self.notes.append(f"metastasis site at day {day}: rule-filled ({cond[1]})")
+                self.metastasis(day)
                 ev = F.EVIDENCE.get((progress.get(day) or {}).get("evidence_of_progression_type"))
                 self.disease_status(day, "worsened", ev)
+            elif "Recurrence" in s["STATUS"]:
+                self.disease_status(day, "worsened")
             elif s["STATUS"] == "Last Follow Up":
                 if s.get("TUMOR_STATUS") == "With Tumor":
                     trend = "worsened" if s.get("PRIMARY_THERAPY_OUTCOME_SUCCESS") == "Progressive Disease" else "stable"
@@ -327,11 +372,58 @@ class Builder:
                                 code=F.loinc("94076-7", "Mutations/Megabase [# Ratio] in Tumor"),
                                 valueQuantity=F.qty(round(float(s["TMB_NONSYNONYMOUS"]), 1), "mutations/Mb", "1/10*6"), **common))
         if not blank(s.get("MSI_SENSOR_SCORE")):
-            v = float(s["MSI_SENSOR_SCORE"])  # MSIsensor decides (decision 6)
-            ans = ("LA14122-8", "Stable") if v < 4 else ("LA26203-2", "Indeterminate") if v <= 10 else ("LA14123-6", "High")
+            # MSIsensor (>10 high, 4-10 indeterminate) and MANTIS (>0.6 high, 0.4-0.6 indeterminate): a call only
+            # when both agree, otherwise indeterminate (decision 6, revised by Bob 2026-11-12)
+            v = float(s["MSI_SENSOR_SCORE"])
+            calls = {"S": "stable" if v < 4 else "indeterminate" if v <= 10 else "high"}
+            if not blank(s.get("MSI_SCORE_MANTIS")):
+                m = float(s["MSI_SCORE_MANTIS"])
+                calls["M"] = "stable" if m < 0.4 else "indeterminate" if m <= 0.6 else "high"
+            call = calls["S"] if len(set(calls.values())) == 1 else "indeterminate"
+            if call == "indeterminate" and len(set(calls.values())) > 1:
+                self.notes.append(f"MSI indeterminate: MSIsensor {calls['S']}, MANTIS {calls['M']}")
+            ans = {"stable": ("LA14122-8", "Stable"), "indeterminate": ("LA11884-6", "Indeterminate"),
+                   "high": ("LA26203-2", "MSI-H")}[call]
+            self.msi_call = call
             self.add(F.resource("Observation", self.rid("msi"), "mcode-tumor-marker-test",
                                 code=F.loinc("81695-9", "Microsatellite instability [Interpretation] in Cancer specimen Qualitative"),
                                 valueCodeableConcept=F.cc(F.LOINC, *ans), **common))
+        self.gdc_lab_markers()
+
+    def gdc_lab_markers(self):
+        """Real clinical markers recorded in GDC (colorectal): preoperative CEA and MMR immunohistochemistry."""
+        tests = [t for f in self.gdc.get("follow_ups", []) for t in (f.get("molecular_tests") or [])]
+        related = [F.ext("mcode-related-condition", "valueReference", self.primary_ref)]
+        cea = next((t for t in tests if t.get("antigen") == "CEA" and t.get("test_value") is not None), None)
+        if cea:
+            day = self.resection_day() - syn.rng(self.mrn, "cea-day").randint(3, 14)  # preoperative
+            self.add(F.resource("Observation", self.rid("cea"), "mcode-tumor-marker-test", status="final",
+                                category=F.obs_category("laboratory", "Laboratory"), code=F.loinc(*F.CEA),
+                                subject=self.subject, effectiveDateTime=self.D(day), extension=related,
+                                valueQuantity=F.qty(float(cea["test_value"]), "ng/mL", "ng/mL"),
+                                referenceRange=[{"high": F.qty(5.0, "ng/mL", "ng/mL")}]))
+            self.notes.append("CEA: real preoperative value from GDC; date set before surgery by rule")
+        mmr = {t["gene_symbol"]: t.get("test_result") for t in tests
+               if t.get("gene_symbol") in F.MMR_IHC and t.get("test_result") in ("Loss of Expression", "Normal")}
+        if not mmr:
+            return
+        if len(mmr) == 4 and all(v == "Loss of Expression" for v in mmr.values()):
+            # loss of all four proteins: every TCGA colorectal case with this pattern is microsatellite stable,
+            # so it is almost certainly a data-entry error (data quirk): not ported
+            self.notes.append("MMR IHC not ported: GDC shows loss of all four proteins (data quirk)")
+            return
+        for gene, result in sorted(mmr.items()):
+            lost = result == "Loss of Expression"
+            self.add(F.resource("Observation", self.rid(f"mmr-{gene.lower()}"), "mcode-tumor-marker-test", status="final",
+                                category=F.obs_category("laboratory", "Laboratory"), code=F.loinc(*F.MMR_IHC[gene]),
+                                subject=self.subject, effectiveDateTime=self.D(self.resection_day()),
+                                specimen=F.ref(self.tumor_specimen), extension=related,
+                                valueCodeableConcept=F.cc(F.LOINC, *(("LA9634-2", "Absent") if lost else ("LA9633-4", "Present")))))
+        deficient = any(v == "Loss of Expression" for v in mmr.values())
+        msi = getattr(self, "msi_call", None)
+        if (deficient and msi == "stable") or (not deficient and len(mmr) == 4 and msi == "high"):
+            self.notes.append(f"MMR IHC ({'deficient' if deficient else 'proficient'}) disagrees with MSI ({msi}): "
+                              "ported as recorded (decision 8)")
 
     def year_shift(self) -> int:
         y = self.gdc_primary().get("year_of_diagnosis")
@@ -357,13 +449,44 @@ class Builder:
                 r["note"] = [{"text": "Smoking history: " + ", ".join(years) + "."}]
             self.add(r)
 
+    LINE_WINDOW = 30  # a drug starting within this many days of a line's start joins that line
+
+    def drug_rows(self) -> list[dict]:
+        """One row per drug and start day: combined agents ("A + B") split; the same drug on the same day
+        (e.g. fluorouracil bolus + infusion) merged, keeping the later stop."""
+        rows: dict[tuple, dict] = {}
+        for t in self.treat:
+            if (t.get("AGENT") or "").startswith("Radiation"):
+                continue
+            parts = [a.strip() for a in (t.get("AGENT") or "").split("+")]
+            if not all(a.lower() in F.RXNORM for a in parts):  # split only known drugs (not e.g. "recPRAME + AS15", one vaccine)
+                parts = [(t.get("AGENT") or "").strip()]
+            for agent in parts:
+                r = {**t, "AGENT": agent}
+                key = (agent.lower(), t["START_DATE"])
+                old = rows.get(key)
+                if old is None or int(r.get("STOP_DATE") or -1) > int(old.get("STOP_DATE") or -1):
+                    rows[key] = r
+        return sorted(rows.values(), key=lambda t: int(t["START_DATE"]))  # stable: keeps the source order within a day
+
+    def treatment_lines(self, drugs: list[dict]) -> list[int]:
+        """Line start days. Supportive drugs never start a line; drugs within LINE_WINDOW days join the line."""
+        starts: list[int] = []
+        for d in sorted({int(t["START_DATE"]) for t in drugs if t["AGENT"].lower() not in F.SUPPORTIVE_DRUGS}):
+            if not starts or d - starts[-1] > self.LINE_WINDOW:
+                starts.append(d)
+        return starts or sorted({int(t["START_DATE"]) for t in drugs})[:1]
+
+    @staticmethod
+    def line_of(starts: list[int], day: int) -> int:
+        return max(1, sum(1 for s in starts if s <= day))
+
     def treatments(self):
         first_prog = self.first_progression_day()
-        drugs = [t for t in self.treat if not (t.get("AGENT") or "").startswith("Radiation")]
+        drugs = self.drug_rows()
         rads = [t for t in self.treat if (t.get("AGENT") or "").startswith("Radiation")]
-        starts = sorted({int(t["START_DATE"]) for t in self.treat})
-        regimens = sorted({int(t["START_DATE"]) for t in drugs})
-        self.treatment_starts = starts
+        self.treatment_starts = sorted({int(t["START_DATE"]) for t in self.treat})
+        lines = self.line_starts = self.treatment_lines(drugs)
 
         def intent_for(t, day, agent=""):
             if agent.lower() in F.SUPPORTIVE_DRUGS:
@@ -381,8 +504,8 @@ class Builder:
             agent = (t.get("AGENT") or "").strip()
             if agent.lower() in ("", "nos", "not otherwise specified"):  # TCGA "Nos": drug not recorded
                 agent = f"Unspecified {(t.get('TREATMENT_TYPE') or 'therapy').lower()}"
-            n = regimens.index(start) + 1
-            later = [d for d in starts if d > start]
+            n = self.line_of(lines, start)
+            later = [d for d in lines if d > start]
             stop = int(t["STOP_DATE"]) if t.get("STOP_DATE") else None
             status = "completed"
             if stop is None and t.get("THERAPY_ONGOING") == "Yes" and not later:
@@ -404,7 +527,10 @@ class Builder:
             bounds = {"start": self.D(start)}
             if stop is not None:
                 bounds["end"] = self.D(stop)
-            r = F.resource("MedicationRequest", self.rid(f"med-r{n}-{agent.lower().replace(' ', '-')}"),
+            rid = self.rid(f"med-r{n}-{agent.lower().replace(' ', '-')}")
+            if any(x["id"] == rid for x in self.resources):  # the same drug restarted within a line
+                rid = self.rid(f"med-r{n}-{agent.lower().replace(' ', '-')}-d{start}")
+            r = F.resource("MedicationRequest", rid,
                            "mcode-cancer-related-medication-request",
                            extension=[F.ext("mcode-procedure-intent", "valueCodeableConcept",
                                             F.sct(*F.INTENT[intent_for(t, start, agent)]))],
@@ -428,7 +554,8 @@ class Builder:
             start = int(t["START_DATE"])
             stop = int(t["STOP_DATE"]) if t.get("STOP_DATE") else None
             distant = first_prog is not None and start >= first_prog
-            body = F.sct("31094006", "Structure of lobe of lung")  # rule T3 (primary site)
+            body = (F.sct(*self.primary_site) if self.colorectal
+                    else F.sct("31094006", "Structure of lobe of lung"))  # rule T3 (primary site)
             if distant:
                 met = [x for x in self.resources if x["id"].startswith(self.rid("metastasis-"))]
                 if met:
@@ -539,19 +666,27 @@ class Builder:
         sex = "woman" if self.pt["SEX"].lower() == "female" else "man"
         stage = self.pt.get("AJCC_PATHOLOGIC_TUMOR_STAGE", "").replace("STAGE ", "stage ")
         cancer = self.sample.get("CANCER_TYPE_DETAILED", "cancer").lower()
-        drugs = [t for t in self.treat if not (t.get("AGENT") or "").startswith("Radiation")]
-        starts = sorted({int(t["START_DATE"]) for t in drugs})
-        name = lambda t: ("unspecified " + (t.get("TREATMENT_TYPE") or "therapy").lower()
-                          if (t.get("AGENT") or "").strip().lower() in ("", "nos") else t["AGENT"].lower())
-        regs = ["/".join(name(t) for t in drugs if int(t["START_DATE"]) == d) for d in starts]
+        if self.colorectal:  # "mucinous adenocarcinoma of the colon and rectum" -> the patient's own site
+            organ = {"C19": "rectosigmoid", "C20": "rectal"}.get((self.pt.get("ICD_O_3_SITE") or "")[:3], "colon")
+            cancer = ("mucinous " if self.sample.get("ONCOTREE_CODE") == "MACR" else "") + f"{organ} adenocarcinoma"
+        drugs = [t for t in self.drug_rows() if t["AGENT"].lower() not in F.SUPPORTIVE_DRUGS]
+        starts = getattr(self, "line_starts", [])
+
+        def name(t):
+            agent = (t.get("AGENT") or "").strip()
+            return ("unspecified " + (t.get("TREATMENT_TYPE") or "therapy").lower()) if agent.lower() in ("", "nos") else agent.lower()
+        regs = ["/".join(dict.fromkeys(name(t) for t in drugs if self.line_of(starts, int(t["START_DATE"])) == i + 1))
+                for i in range(len(starts))]
         active = [r for r in self.resources if r["resourceType"] == "MedicationRequest" and r["status"] == "active"]
         statuses = sorted((x["effectiveDateTime"], x["valueCodeableConcept"]["coding"][0]["code"]) for x in self.resources
                           if x["resourceType"] == "Observation" and x["id"].startswith(self.rid("disease-status")))
-        progressing = bool(statuses) and statuses[-1][1] == "271299001"
+        # progressing: the latest status is "worsened" and no line of therapy started after it
+        progressing = (bool(statuses) and statuses[-1][1] == "271299001"
+                       and not any(self.D(d) > statuses[-1][0][:10] for d in starts))
         markers = f" ({', '.join(self.key_biomarkers)})" if self.key_biomarkers else ""
         lines = f"{len(regs)} line{'s' if len(regs) != 1 else ''} of therapy ({', '.join(regs)})"
         events = " ".join(st["STATUS"] for st in self.status)
-        extent = ("metastatic " if "Metastasis" in events else "recurrent " if "Recurrence" in events else "")
+        extent = ("metastatic " if "Metastasis" in events or self.m1 else "recurrent " if "Recurrence" in events else "")
         bio = ", ".join(self.key_biomarkers)
         if extent:
             head = f"{age}-year-old {sex} with {extent}{cancer} (initially {stage}" + (f"; {bio})" if bio else ")")

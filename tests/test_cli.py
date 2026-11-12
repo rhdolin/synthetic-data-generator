@@ -13,7 +13,7 @@ def test_help_lists_commands(capsys):
 
 def test_unsupported_study_refused():
     with pytest.raises(SystemExit) as exc:
-        cli.main(["run", "--study", "coadread_tcga_pan_can_atlas_2018", "--patients", "TCGA-XX-0000"])
+        cli.main(["run", "--study", "brca_tcga_pan_can_atlas_2018", "--patients", "TCGA-XX-0000"])
     assert "not supported" in str(exc.value)
 
 

@@ -1,6 +1,8 @@
 """Therapeutic implications from a pinned CIViC release (docs/mapping.md "Therapeutic implications").
 
 Rule (Bob, 2026-11-10): predictive, accepted, "Supports", level A or B, the patient's tumor type.
+Tumor-agnostic evidence ("Cancer", DOID:162, or "Solid Tumor") also counts, at level A only: the tissue-agnostic
+approvals (NTRK, RET, BRAF V600E) without the many gene-level level-B pan-cancer items (Bob, 2026-11-12).
 Per variant: at most 2 sensitivity therapies (higher level first; at the same level a US-marketed
 therapy beats an experimental one; remaining ties are all kept) plus the best resistance item.
 """
@@ -15,7 +17,9 @@ from synthgen.genomic import annotate as A
 RELEASE = "01-Nov-2026"
 LEVEL_TEXT = {"A": "A (Validated association)", "B": "B (Clinical evidence)"}
 # OncoTree -> Disease Ontology IDs counted as "the same tumor type"
-TUMOR_TYPE_DOIDS = {"LUAD": {"3910", "3908", "1324"}, "LUSC": {"3907", "3908", "1324"}}
+_COLORECTAL_DOIDS = {"9256", "0050861", "219", "234", "1520", "3029", "3033", "1993", "1996"}  # colorectal, colon, rectum
+TUMOR_TYPE_DOIDS = {"LUAD": {"3910", "3908", "1324"}, "LUSC": {"3907", "3908", "1324"},
+                    "COAD": _COLORECTAL_DOIDS, "READ": _COLORECTAL_DOIDS, "MACR": _COLORECTAL_DOIDS, "COADREAD": _COLORECTAL_DOIDS}
 
 
 def release_rows(release: str = RELEASE) -> list[dict]:
@@ -77,10 +81,17 @@ def therapies_of(row: dict) -> list[list[dict]]:
     return [drugs]
 
 
+TUMOR_AGNOSTIC = {"Cancer", "Solid Tumor", "Solid Tumors, Advanced"}
+
+
+def same_tumor_type(r: dict, doids: set[str]) -> bool:
+    return r["doid"] in doids or (r["evidence_level"] == "A" and r["disease"] in TUMOR_AGNOSTIC)
+
+
 def select(reported: list[dict], oncotree: str, release: str = RELEASE) -> list[dict]:
     doids = TUMOR_TYPE_DOIDS.get(oncotree, set())
     rows = [r for r in release_rows(release) if r["evidence_type"] == "Predictive" and r["evidence_status"] == "accepted"
-            and r["evidence_direction"] == "Supports" and r["evidence_level"] in ("A", "B") and r["doid"] in doids]
+            and r["evidence_direction"] == "Supports" and r["evidence_level"] in ("A", "B") and same_tumor_type(r, doids)]
     out = []
     for v in reported:
         names = profiles_for(v)

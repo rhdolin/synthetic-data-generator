@@ -24,7 +24,8 @@ HGVS = "http://varnomen.hgvs.org"
 V2_0074 = "http://terminology.hl7.org/CodeSystem/v2-0074"
 LAB = "http://terminology.hl7.org/CodeSystem/observation-category"
 CHANGE_TYPE_SO = {"SNV": ("SO:0001483", "SNV"), "MNV": ("SO:0002007", "MNV"), "INS": ("SO:0000667", "insertion"),
-                  "DEL": ("SO:0000159", "deletion"), "CNV": ("SO:0001019", "copy_number_variation")}
+                  "DEL": ("SO:0000159", "deletion"), "CNV": ("SO:0001019", "copy_number_variation"),
+                  "FUSION": ("SO:0001565", "gene_fusion")}
 
 
 FUSION_DRIVERS = {"ALK", "ROS1", "RET", "NTRK1", "NTRK2", "NTRK3", "NRG1", "FGFR1", "FGFR2", "FGFR3", "BRAF", "MET"}
@@ -54,6 +55,19 @@ def site_phrase(display: str) -> str:
     if m:
         return f"{m.group(1).lower()} {m.group(2)}"
     return display.replace("Structure of ", "").replace(" structure", "").lower()
+
+
+NCIT = "http://ncicb.nci.nih.gov/xml/owl/EVS/Thesaurus.owl"
+
+
+def phenotype(row: dict) -> dict:
+    """CIViC disease -> coded phenotype: its DOID; tumor-agnostic "Solid Tumor" (no DOID in CIViC) -> NCIt C9292
+    Solid Neoplasm, so apps can recognize tumor-agnostic evidence ("Cancer" is DOID:162)."""
+    if row["doid"]:
+        return {"coding": [{"system": "https://disease-ontology.org", "code": f"DOID:{row['doid']}", "display": row["disease"]}]}
+    if row["disease"].startswith("Solid Tumor"):
+        return {"coding": [F.coding(NCIT, "C9292", "Solid Neoplasm")], "text": row["disease"]}
+    return {"text": row["disease"]}
 
 
 def reportable_genes() -> set[str]:
@@ -116,10 +130,12 @@ class Genomics:
         site = site_phrase(b.primary_site[1])
         histo = F.MORPHOLOGY.get(p.get("ICD_O_3_HISTOLOGY"), "carcinoma").replace(", NOS", "").lower()
         t, n, m = p.get("PATH_T_STAGE", ""), p.get("PATH_N_STAGE", ""), p.get("PATH_M_STAGE", "")
-        stage = " ".join(x for x in [f"p{t}" if t else "", f"p{n}" if n else "", f"p{m}" if m and m != "MX" else ""] if x)
+        stage = " ".join(x for x in [f"p{F.tnm(t)}" if t else "", f"p{F.tnm(n)}" if n else "",
+                                     f"p{F.tnm(m)}" if m and m != "MX" else ""] if x)
         ed = (p.get("AJCC_STAGING_EDITION") or "").lower()
         noun = F.PROCUREMENT.get(b.procurement, (None, "specimen"))[1]
-        text = f"Lung, {site}, {noun}: Invasive {histo}."
+        text = (f"{site[0].upper() + site[1:]}, {noun}: Invasive {histo}." if b.colorectal
+                else f"Lung, {site}, {noun}: Invasive {histo}.")
         if stage:
             text += f" Pathologic stage (AJCC {ed} edition): {stage}." if ed else f" Pathologic stage: {stage}."
         group = next((r for r in b.resources if r["id"] == b.rid("tnm-pathologic-stage-group")), None)
@@ -134,16 +150,38 @@ class Genomics:
         rad = ("LP29684-5", "RAD")
         pre = syn.rng(b.mrn, "staging-ct").randint(3, 14)
         where = site_phrase(b.primary_site[1])
-        self.report("imaging-staging", rad, ("24627-2", "CT Chest"), -pre, 0, self.radiologist,
-                    f"{where[0].upper() + where[1:]} mass, consistent with primary lung malignancy. No evidence of distant metastatic disease.")
+        cap = where[0].upper() + where[1:]
+
+        def met_site(met):
+            return F.site_word(met["bodySite"][0]["coding"][0]["display"])
+        mets = [r for r in b.resources if r["id"].startswith(b.rid("metastasis-"))]
+        at_dx = [m for m in mets if m["id"].endswith("-d0")]
+        distant = (f" {met_site(at_dx[0])[0].upper() + met_site(at_dx[0])[1:]} lesion(s), consistent with metastatic disease."
+                   if at_dx else " No evidence of distant metastatic disease.")
+        if b.colorectal:
+            self.report("imaging-staging", rad, ("72254-6", "CT Chest and Abdomen and Pelvis W contrast IV"), -pre, 0,
+                        self.radiologist, f"{cap} mass, consistent with primary colorectal malignancy.{distant}")
+        else:
+            self.report("imaging-staging", rad, ("24627-2", "CT Chest"), -pre, 0, self.radiologist,
+                        f"{cap} mass, consistent with primary lung malignancy.{distant}")
         study_for = {"94222008": ("39818-0", "NM Whole body Bone Views"), "94225005": ("24590-2", "MR Brain")}
-        for met in [r for r in b.resources if r["id"].startswith(b.rid("metastasis-"))]:
+        for met in [m for m in mets if m not in at_dx]:
             day = int(met["id"].rsplit("-d", 1)[1])
             code = met["code"]["coding"][0]["code"]
             study = study_for.get(code, ("72254-6", "CT Chest and Abdomen and Pelvis W contrast IV"))
-            site = met["bodySite"][0]["coding"][0]["display"].replace(" structure", "").replace("Structure of ", "").lower()
+            site = met_site(met)
             self.report(f"imaging-d{day}", rad, study, day, 0, self.radiologist,
                         f"New {site} lesion(s), consistent with metastatic disease.")
+        for day, site in b.progressed.items():
+            self.report(f"imaging-d{day}", rad, ("72254-6", "CT Chest and Abdomen and Pelvis W contrast IV"), day, 0,
+                        self.radiologist, f"Progression of {site} metastatic disease.")
+        for e in b.status:
+            if e["STATUS"] in ("Recurrence", "Locoregional Recurrence"):
+                day = int(e["START_DATE"])
+                text = (f"Locoregional recurrence at the {where}." if e["STATUS"] == "Locoregional Recurrence"
+                        else "Findings consistent with recurrent disease.")
+                self.report(f"imaging-d{day}", rad, ("72254-6", "CT Chest and Abdomen and Pelvis W contrast IV"), day, 0,
+                            self.radiologist, text)
         for t in b.treat:
             if (t.get("MEASURE_OF_RESPONSE") or "") == "radiographic progressive disease" and t.get("STOP_DATE"):
                 day = int(t["STOP_DATE"])
@@ -152,7 +190,7 @@ class Genomics:
         last = [s for s in b.status if s["STATUS"] == "Last Follow Up" and s.get("TUMOR_STATUS") == "With Tumor"]
         if last:
             day = int(last[0]["START_DATE"])
-            sites = sorted({r["bodySite"][0]["coding"][0]["display"].replace(" structure", "").lower()
+            sites = sorted({F.site_word(r["bodySite"][0]["coding"][0]["display"])
                             for r in b.resources if r["id"].startswith(b.rid("metastasis-"))})
             self.report(f"imaging-d{day}", rad, ("72254-6", "CT Chest and Abdomen and Pelvis W contrast IV"), day, 0,
                         self.radiologist, f"Persistent/progressive disease{' (' + ', '.join(sites) + ')' if sites else ''}.")
@@ -191,18 +229,20 @@ class Genomics:
         implications = civic.select(reported, b.sample["ONCOTREE_CODE"])
         imp_obs = [self.implication(c) for c in implications]
         region = self.region_studied()
-        pd = self.pdl1(mdet)
+        pd = None if b.colorectal else self.pdl1(mdet)  # no PD-L1 for colorectal (Bob, 2026-11-12)
         study = self.genomic_study(test)
         markers = [r for r in b.resources if r["id"] in (b.rid("tmb"), b.rid("msi"))]
         self.genomics_report(test, region, obs, imp_obs, markers + ([pd] if pd else []), study, reported, implications)
         # for the tumor board note: standard lung drivers, or anything with level-A evidence
-        drivers = {"EGFR", "ALK", "ROS1", "KRAS", "BRAF", "MET", "RET", "ERBB2", "NTRK1", "NTRK2", "NTRK3", "NRG1"}
+        drivers = {"EGFR", "ALK", "ROS1", "KRAS", "NRAS", "BRAF", "MET", "RET", "ERBB2", "NTRK1", "NTRK2", "NTRK3", "NRG1"}
         def label(v):
             if v["kind"] == "fusion":
                 return f"{v['gene']} fusion"
             return f"{v['gene']} {v.get('protein_short') or v['kind']}"
         b.key_biomarkers = sorted({label(c["variant"]) for c in implications if c["significance"] == "Sensitivity/Response"
                                    and (c["level"] == "A" or set(c["variant"].get("genes") or [c["variant"]["gene"]]) & drivers)})
+        if getattr(b, "msi_call", None) == "high":
+            b.key_biomarkers.append("MSI-high")
         self.notes.append(f"genomic: {len(muts)} PASS mutations, {len(cnvs)} CNV records, {len(conseq)} MolecConseq; "
                           f"reported {len(reported)}; implications {len(implications)}")
 
@@ -273,7 +313,7 @@ class Genomics:
     def implication(self, c: dict) -> dict:
         b, row = self.b, c["row"]
         comps = [self.comp("81259-4", "Associated phenotype",
-                           valueCodeableConcept={"coding": [{"system": "https://disease-ontology.org", "code": f"DOID:{row['doid']}", "display": row["disease"]}]}),
+                           valueCodeableConcept=phenotype(row)),
                  self.comp("93044-6", "Level of evidence", valueCodeableConcept={"text": civic.LEVEL_TEXT[c["level"]]})]
         for d in c["drugs"]:
             med = {"text": d["name"].title()}
@@ -333,8 +373,11 @@ class Genomics:
         exts = [{"url": GR + "genomic-study-analysis-method-type",
                  "valueCodeableConcept": F.cc("http://hl7.org/fhir/uv/genomics-reporting/CodeSystem/genomic-study-method-type-cs",
                                               "sequence-analysis-of-the-entire-coding-region", "Sequence analysis of the entire coding region")}]
+        # fusions are reported as DNA variants (mCODE), so the analysis lists gene_fusion when the patient has one
+        # (Bob, 2026-11-12; FHIR only: Mongo holds no fusions, D20)
+        types = test["dnaChangeType"] + (["FUSION"] if any(v["kind"] == "fusion" for v in self.reported) else [])
         exts += [{"url": GR + "genomic-study-analysis-change-type", "valueCodeableConcept": F.cc(SO, *CHANGE_TYPE_SO[t])}
-                 for t in test["dnaChangeType"]]
+                 for t in types]
         exts += [{"url": GR + "genomic-study-analysis-genome-build", "valueCodeableConcept": F.cc(F.LOINC, "LA14029-5", "GRCh37")},
                  {"url": GR + "genomic-study-analysis-genomic-source-class", "valueCodeableConcept": F.cc(F.LOINC, "LA6684-0", "Somatic")}]
         exts += [{"url": GR + "genomic-study-analysis-specimen", "valueReference": s} for s in specimens]
@@ -370,7 +413,8 @@ class Genomics:
         pd = next((m for m in markers if m["id"] == b.rid("pdl1")), None)
         text = "Tumor whole-exome sequencing (reported genes: 228-gene panel): " + (", ".join(parts) or "no reportable variants") + "."
         if msi:
-            text += " Microsatellite " + msi["valueCodeableConcept"]["coding"][0]["display"].lower() + ";"
+            text += {"stable": " Microsatellite stable;", "high": " Microsatellite instability-high (MSI-H);",
+                     "indeterminate": " Microsatellite status indeterminate;"}[b.msi_call]
         if tmb:
             text += f" TMB {tmb['valueQuantity']['value']} mutations/Mb."
         if pd:

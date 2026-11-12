@@ -110,15 +110,18 @@ ETHNICITY = {
 # AJCC values (SNOMED qualifiers), keyed by TCGA value without the prefix letter
 AJCC_T = {"T1": "1228957006", "T1A": "1228959009", "T1B": "1228962007", "T2": "1229852009",
           "T2A": "1229853004", "T2B": "1229856007", "T3": "1229859000", "T4": "1229864001",
-          "TX": "1228950008"}
+          "TX": "1228950008", "TIS": "1228953005", "T4A": "1229865000", "T4B": "1229866004"}
 AJCC_N = {"N0": "1229947003", "N1": "1229951001", "N2": "1229957002", "N3": "1229962001",
-          "NX": "1229945006"}
+          "NX": "1229945006", "N1A": "1229954009", "N1B": "1229955005", "N1C": "1229956006",
+          "N2A": "1229959004", "N2B": "1229960009"}
 AJCC_M = {"M1": "1229916009", "M1A": "1229917000", "M1B": "1229920008"}  # MX/M0: no M Observation
 AJCC_STAGE = {"STAGE I": ("1222723001", "I"), "STAGE IA": ("1222724007", "IA"),
               "STAGE IB": ("1222728005", "IB"), "STAGE II": ("1222765007", "II"),
               "STAGE IIA": ("1222766008", "IIA"), "STAGE IIB": ("1222769001", "IIB"),
               "STAGE IIIA": ("1222802001", "IIIA"), "STAGE IIIB": ("1222805004", "IIIB"),
-              "STAGE IV": ("1222837003", "IV")}
+              "STAGE IIC": ("1222770000", "IIC"), "STAGE III": ("1222801008", "III"),
+              "STAGE IIIC": ("1222806003", "IIIC"), "STAGE IV": ("1222837003", "IV"),
+              "STAGE IVA": ("1222838008", "IVA"), "STAGE IVB": ("1222841004", "IVB")}
 AJCC_EDITION = {
     "6TH": ("444256004", "American Joint Committee on Cancer, Cancer Staging Manual, 6th edition neoplasm staging system"),
     "7TH": ("443830009", "American Joint Committee on Cancer, Cancer Staging Manual, 7th edition neoplasm staging system"),
@@ -126,6 +129,17 @@ AJCC_EDITION = {
 
 # OncoTree -> primary cancer (SNOMED disorder)
 ONCOTREE = {"LUAD": ("254626006", "Adenocarcinoma of lung")}
+COLORECTAL = {"COAD", "READ", "MACR"}  # colorectal OncoTree codes: the primary-cancer code follows the site
+COLORECTAL_PRIMARY = {"C18": ("1701000119104", "Primary adenocarcinoma of colon"),
+                      "C19": ("425178004", "Adenocarcinoma of rectosigmoid junction"),
+                      "C20": ("254582000", "Adenocarcinoma of rectum")}
+
+
+def primary_code(oncotree: str, icdo_site: str):
+    """SNOMED primary-cancer disorder: by OncoTree code, or by site for colorectal (mucinous: histology extension)."""
+    if oncotree in COLORECTAL:
+        return COLORECTAL_PRIMARY.get((icdo_site or "C18")[:3], COLORECTAL_PRIMARY["C18"])
+    return ONCOTREE[oncotree]
 # ICD-O-3 morphology codes used as-is in the histology extension (its value set includes ICD-O-3)
 MORPHOLOGY = {
     "8140/3": "Adenocarcinoma, NOS", "8255/3": "Adenocarcinoma with mixed subtypes",
@@ -134,6 +148,7 @@ MORPHOLOGY = {
     "8250/3": "Bronchiolo-alveolar adenocarcinoma, NOS", "8480/3": "Mucinous adenocarcinoma",
     "8230/3": "Solid carcinoma, NOS", "8507/3": "Micropapillary carcinoma, NOS",
     "8310/3": "Clear cell adenocarcinoma, NOS", "8490/3": "Signet ring cell carcinoma",
+    "8263/3": "Adenocarcinoma in tubulovillous adenoma", "8211/3": "Tubular adenocarcinoma", "8010/3": "Carcinoma, NOS",
 }
 # ICD-O-3 topography (+ laterality) -> SNOMED body structure
 SITE = {
@@ -151,6 +166,12 @@ SITE = {
     ("C34.8", None): ("39607008", "Lung structure"),
     ("C34.9", "Right"): ("3341006", "Right lung structure"), ("C34.9", "Left"): ("44029006", "Left lung structure"),
     ("C34.9", None): ("39607008", "Lung structure"),
+    ("C18.0", None): ("32713005", "Cecum structure"), ("C18.1", None): ("66754008", "Appendix structure"),
+    ("C18.2", None): ("9040008", "Ascending colon structure"), ("C18.3", None): ("48338005", "Structure of right colic flexure"),
+    ("C18.4", None): ("485005", "Transverse colon structure"), ("C18.5", None): ("72592005", "Structure of left colic flexure"),
+    ("C18.6", None): ("32622004", "Descending colon structure"), ("C18.7", None): ("60184004", "Sigmoid colon structure"),
+    ("C18.8", None): ("71854001", "Colon structure"), ("C18.9", None): ("71854001", "Colon structure"),
+    ("C19.9", None): ("49832006", "Structure of rectosigmoid junction"), ("C20.9", None): ("34402009", "Rectum structure"),
 }
 
 
@@ -176,12 +197,20 @@ _ICD10CM_DISPLAY = {
     "C34.90": "Malignant neoplasm of unspecified part of unspecified bronchus or lung",
     "C34.91": "Malignant neoplasm of unspecified part of right bronchus or lung",
     "C34.92": "Malignant neoplasm of unspecified part of left bronchus or lung",
+    "C18.0": "Malignant neoplasm of cecum", "C18.1": "Malignant neoplasm of appendix",
+    "C18.2": "Malignant neoplasm of ascending colon", "C18.3": "Malignant neoplasm of hepatic flexure",
+    "C18.4": "Malignant neoplasm of transverse colon", "C18.5": "Malignant neoplasm of splenic flexure",
+    "C18.6": "Malignant neoplasm of descending colon", "C18.7": "Malignant neoplasm of sigmoid colon",
+    "C18.8": "Malignant neoplasm of overlapping sites of colon", "C18.9": "Malignant neoplasm of colon, unspecified",
+    "C19": "Malignant neoplasm of rectosigmoid junction", "C20": "Malignant neoplasm of rectum",
 }
 
 
-def icd10cm_lung(icd10: str, laterality: str | None):
-    """WHO ICD-10 C34.x (+ GDC laterality) -> ICD-10-CM code and display; None if not a lung code."""
+def icd10cm(icd10: str, laterality: str | None):
+    """WHO ICD-10 (+ GDC laterality for lung) -> ICD-10-CM code and display; None if not in the crosswalk."""
     base = icd10[:5]
+    if not base.startswith("C34"):  # colorectal: WHO and CM codes are the same
+        return (base, _ICD10CM_DISPLAY[base]) if base in _ICD10CM_DISPLAY else None
     if base == "C34.2":
         code = "C34.2"
     else:
@@ -194,6 +223,13 @@ PROCUREMENT = {
     "Tumor Resection": (("77648009", "Excision of lesion of lung"), "resection"),
     "Excisional Biopsy": (("77648009", "Excision of lesion of lung"), "excisional biopsy"),
     "Fine Needle Aspiration": (("432231006", "Fine needle aspiration biopsy of lung"), "fine needle aspiration"),
+    "Right Hemicolectomy": (("359571009", "Right colectomy"), "right hemicolectomy"),
+    "Left Hemicolectomy": (("82619000", "Left colectomy"), "left hemicolectomy"),
+    "Sigmoid Colectomy": (("84604002", "Sigmoid colectomy"), "sigmoid colectomy"),
+    "Transverse Colectomy": (("26925005", "Transverse colectomy"), "transverse colectomy"),
+    "Total Colectomy": (("26390003", "Total colectomy"), "total colectomy"),
+    "Anterior Resection Of Rectum": (("4558008", "Anterior resection of rectum"), "anterior resection"),
+    "Abdomino-Perineal Resection Of Rectum": (("265414003", "Abdominoperineal resection"), "abdominoperineal resection"),
 }
 # Prior cancers are past history ("prior X" = history of X), never a malignancy code.
 # GDC tissue_or_organ_of_origin (keyword) -> (SNOMED history-of code, ICD-10-CM Z85 code); checked on tx.fhir.org
@@ -232,8 +268,49 @@ METASTASIS_SITES = {
         (("94381002", "Metastatic malignant neoplasm to liver"), ("10200004", "Liver structure")),
         (("94161006", "Metastatic malignant neoplasm to adrenal gland"), ("23451007", "Adrenal structure")),
         (("94391008", "Metastatic malignant neoplasm to lung"), ("39607008", "Lung structure")),
-    ]
+    ],
+    # colorectal: liver most often (listed twice to weight it), then lung, peritoneum, distant lymph nodes
+    "COLORECTAL": [
+        (("94381002", "Metastatic malignant neoplasm to liver"), ("10200004", "Liver structure")),
+        (("94381002", "Metastatic malignant neoplasm to liver"), ("10200004", "Liver structure")),
+        (("94391008", "Metastatic malignant neoplasm to lung"), ("39607008", "Lung structure")),
+        (("94627008", "Metastatic malignant neoplasm to peritoneum"), ("15425007", "Structure of serous membrane of peritoneum")),
+        (("94392001", "Metastatic malignant neoplasm to lymph node"), ("59441001", "Structure of lymph node")),
+    ],
 }
+
+
+# GDC progression_or_recurrence_anatomic_site -> (condition, body structure), when GDC names the site
+GDC_MET_SITE = {
+    "Liver": (("94381002", "Metastatic malignant neoplasm to liver"), ("10200004", "Liver structure")),
+    "Lung, NOS": (("94391008", "Metastatic malignant neoplasm to lung"), ("39607008", "Lung structure")),
+    "Brain, NOS": (("94225005", "Metastatic malignant neoplasm to brain"), ("12738006", "Brain structure")),
+    "Bone, NOS": (("94222008", "Metastatic malignant neoplasm to bone"), ("272673000", "Bone structure")),
+}
+# GDC molecular_tests (IHC) -> LOINC; results: "Loss of Expression" -> Absent, retained -> Present
+MMR_IHC = {"MLH1": ("81691-8", "MLH-1 Ag [Presence] in Cancer specimen by Immune stain"),
+           "MSH2": ("81692-6", "MSH-2 Ag [Presence] in Cancer specimen by Immune stain"),
+           "MSH6": ("81693-4", "MSH-6 Ag [Presence] in Cancer specimen by Immune stain"),
+           "PMS2": ("81694-2", "PMS2 Ag [Presence] in Cancer specimen by Immune stain")}
+CEA = ("2039-6", "Carcinoembryonic Ag [Mass/volume] in Serum or Plasma")
+
+
+_SITE_WORD = {"Structure of serous membrane of peritoneum": "peritoneal", "Structure of lymph node": "lymph node",
+              "Adrenal structure": "adrenal"}
+
+
+def site_word(display: str) -> str:
+    """Body structure display -> the word used in report and note text: 'Liver structure' -> 'liver'."""
+    return _SITE_WORD.get(display) or display.replace(" structure", "").replace("Structure of ", "").lower()
+
+
+def tnm(value: str) -> str:
+    """'T4A' -> 'T4a', 'N2B' -> 'N2b', 'TIS' -> 'Tis'; X stays upper case ('NX')."""
+    return value[0] + value[1:].lower().replace("x", "X") if value else value
+
+
+def metastasis_sites(oncotree: str) -> list:
+    return METASTASIS_SITES["COLORECTAL" if oncotree in COLORECTAL else oncotree]
 
 SMOKING = {  # GDC tobacco_smoking_status -> SNOMED
     "Current Reformed Smoker for > 15 yrs": ("8517006", "Ex-smoker"),
@@ -250,8 +327,12 @@ RXNORM = {  # TCGA AGENT (lower case) -> RxNorm ingredient
     "gefitinib": "328134", "zoledronic acid": "77655", "vinblastine": "11198", "irinotecan": "51499",
     "nivolumab": "1597876", "topotecan": "57308", "cyclophosphamide": "3002", "belinostat": "1543543",
     "cyanocobalamin": "11248", "pegfilgrastim": "338036", "denosumab": "993449",
+    # colorectal (checked on RxNav 2026-11-12)
+    "fluorouracil": "4492", "leucovorin": "6313", "oxaliplatin": "32592", "capecitabine": "194000",
+    "cetuximab": "318341", "panitumumab": "263034", "aflibercept": "1232150", "regorafenib": "1312397",
+    "mitomycin": "632", "floxuridine": "4488", "raltitrexed": "196239", "filgrastim": "68442", "dexamethasone": "3264",
 }
-SUPPORTIVE_DRUGS = {"zoledronic acid", "denosumab", "pegfilgrastim", "cyanocobalamin"}
+SUPPORTIVE_DRUGS = {"zoledronic acid", "denosumab", "pegfilgrastim", "cyanocobalamin", "filgrastim", "dexamethasone"}
 
 INTENT = {
     "curative": ("373808002", "Curative - procedure intent"),

@@ -11,6 +11,8 @@ import datetime as dt
 import json
 from pathlib import Path
 
+from synthgen.clinical import fhir as F
+
 FIELDS = ["mrn", "name", "age_sex", "tumor_type", "stage", "extent", "course", "key_findings", "implications",
           "pdl1", "tmb", "msi", "images", "fit", "rule_filled", "messy"]
 
@@ -32,6 +34,8 @@ def tumor_type(primary: dict | None) -> str:
     text = (primary.get("code", {}).get("text") or "").strip()
     sub = text.replace("Lung Adenocarcinoma", "").strip(" ,()-").replace("NOS", "").strip(" ,()")
     sub = sub.removeprefix("Lung ").removeprefix("lung ").lower()
+    if set(sub.split()) <= set(coded.lower().split()):  # e.g. "colon adenocarcinoma" adds nothing to the coded type
+        sub = ""
     return f"{coded} — {sub}" if sub else coded
 
 
@@ -59,7 +63,7 @@ def case_row(patient_dir: Path, harvest_dir: Path, board: dt.date | None = None)
     stage = _display(((primary or {}).get("stage") or [{}])[0].get("summary")).replace(" (AJCC)", "")
     mets = [r for r in rs if r["resourceType"] == "Condition" and "-metastasis-" in r["id"]]
     status = (sr or {}).get("note", [{}])[0].get("text", "")
-    extent = ("metastatic (" + ", ".join(_display(m["bodySite"][0]).replace(" structure", "").lower() for m in mets) + ")") if mets \
+    extent = ("metastatic (" + ", ".join(dict.fromkeys(F.site_word(_display(m["bodySite"][0])) for m in mets)) + ")") if mets \
         else ("recurrent" if "recurrent" in status else "localized")
     meds = sorted((r for r in rs if r["resourceType"] == "MedicationRequest"),
                   key=lambda r: r["dosageInstruction"][0]["timing"]["repeat"]["boundsPeriod"]["start"])
