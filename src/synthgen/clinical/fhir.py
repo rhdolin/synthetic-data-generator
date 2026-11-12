@@ -260,7 +260,7 @@ def prior_primary(organ: str) -> tuple:
             return sct_code, icd, sct_code[0] != "266987004"
     return _PRIOR_GENERIC[0], _PRIOR_GENERIC[1], False
 
-# Metastasis sites for the rule-filled site (decision 3): (condition code, body structure)
+# Metastasis sites for the rule-filled site: (condition code, body structure)
 METASTASIS_SITES = {
     "LUAD": [
         (("94225005", "Metastatic malignant neoplasm to brain"), ("12738006", "Brain structure")),

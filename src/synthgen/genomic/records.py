@@ -99,7 +99,7 @@ def mutations(extract: Path, test: dict, notes: list | None = None) -> tuple[lis
         if structural:
             details.append({"variant": rec, "maf": m, "gene": gene, "mane": None, "protein_altering": False})
             continue
-        # molecular consequences: MANE always, plus the most severe if on another transcript (G3)
+        # molecular consequences: MANE always, plus the most severe if on another transcript
         ann = annotations.get(vid, {})
         tcs = [t for t in ann.get("transcript_consequences", []) if t.get("transcript_id", "").startswith(("NM_", "XM_", "NR_"))]
         mane_tc = next((t for t in tcs if t["transcript_id"] in mane["select"]), None)
@@ -130,7 +130,7 @@ def mutations(extract: Path, test: dict, notes: list | None = None) -> tuple[lis
 
 
 def copy_numbers(extract: Path, test: dict, sample_id: str) -> tuple[list[dict], list[dict]]:
-    """+/-2 discrete calls (G1) as gene-level CNV records, CN estimated from the segment mean."""
+    """+/-2 discrete calls as gene-level CNV records, CN estimated from the segment mean."""
     with open(extract / "data_cna.txt", newline="") as fh:
         rd = csv.reader(fh, delimiter="\t")
         header = next(rd)

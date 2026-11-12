@@ -373,7 +373,7 @@ class Builder:
                                 valueQuantity=F.qty(round(float(s["TMB_NONSYNONYMOUS"]), 1), "mutations/Mb", "1/10*6"), **common))
         if not blank(s.get("MSI_SENSOR_SCORE")):
             # MSIsensor (>10 high, 4-10 indeterminate) and MANTIS (>0.6 high, 0.4-0.6 indeterminate): a call only
-            # when both agree, otherwise indeterminate (decision 6, revised by Bob 2026-11-12)
+            # when both agree, otherwise indeterminate (Bob, 2026-11-12)
             v = float(s["MSI_SENSOR_SCORE"])
             calls = {"S": "stable" if v < 4 else "indeterminate" if v <= 10 else "high"}
             if not blank(s.get("MSI_SCORE_MANTIS")):
@@ -423,7 +423,7 @@ class Builder:
         msi = getattr(self, "msi_call", None)
         if (deficient and msi == "stable") or (not deficient and len(mmr) == 4 and msi == "high"):
             self.notes.append(f"MMR IHC ({'deficient' if deficient else 'proficient'}) disagrees with MSI ({msi}): "
-                              "ported as recorded (decision 8)")
+                              "ported as recorded")
 
     def year_shift(self) -> int:
         y = self.gdc_primary().get("year_of_diagnosis")
