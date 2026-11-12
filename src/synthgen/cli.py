@@ -4,6 +4,7 @@ Commands:
   studies    list the supported studies and their caveats
   patients   list a study's patients: eligibility and features, to choose from
   run        generate patients (by ID or by criteria): harvest, build, validate, load; writes a run report
+  catalog    (re)write the study's case catalog: who each synthesized patient is, clinically
 
 Run "synthgen <command> --help" for a command's options.
 """
@@ -81,18 +82,40 @@ def validate(bundle: Path, validator: Path) -> tuple[int, int]:
     for line in out.read_text().splitlines():
         if ": Error - " in line:
             errors += 1
-            if any(k in line for k in ("predicted-therapeutic-implication", "varnomen", "hgvs-vs")):
-                known += 1
+            if any(k in line for k in ("predicted-therapeutic-implication", "varnomen", "hgvs-vs", "request timed out")):
+                known += 1  # cross-version implication code; tx.fhir.org HGVS limits and timeouts
     return errors, known
 
 
 def load_fhir(bundle: Path, base: str) -> str:
+    """PUT the bundle, then delete this patient's resources on the server that the new bundle no longer has
+    (e.g. a dropped fusion), so a reload leaves exactly the bundle's content."""
     import requests
-    r = requests.post(base, data=bundle.read_bytes(), timeout=300,
-                      headers={"Content-Type": "application/fhir+json", "Accept": "application/fhir+json"})
+    headers = {"Content-Type": "application/fhir+json", "Accept": "application/fhir+json"}
+    data = json.loads(bundle.read_text())
+    new = {f"{e['resource']['resourceType']}/{e['resource']['id']}" for e in data["entry"]}
+    patient = next(e["resource"]["id"] for e in data["entry"] if e["resource"]["resourceType"] == "Patient")
+    prefix = patient.removesuffix("-patient")
+    old = set()
+    url = f"{base}/Patient/{patient}/$everything?_count=500"
+    while url:
+        r = requests.get(url, headers={"Accept": "application/fhir+json", "Cache-Control": "no-cache"}, timeout=120)
+        if r.status_code == 404:
+            break
+        r.raise_for_status()
+        page = r.json()
+        old |= {f"{e['resource']['resourceType']}/{e['resource']['id']}" for e in page.get("entry", [])
+                if e["resource"]["id"].startswith(prefix + "-")}
+        url = next((l["url"] for l in page.get("link", []) if l["relation"] == "next"), None)
+    r = requests.post(base, data=bundle.read_bytes(), timeout=300, headers=headers)
     r.raise_for_status()
     statuses = [e["response"]["status"] for e in r.json().get("entry", [])]
-    return f"{len(statuses)} resources ({sum(s.startswith('201') for s in statuses)} created)"
+    stale = sorted(old - new)
+    if stale:
+        tx = {"resourceType": "Bundle", "type": "transaction",
+              "entry": [{"request": {"method": "DELETE", "url": ref}} for ref in stale]}
+        requests.post(base, json=tx, timeout=300, headers=headers).raise_for_status()
+    return f"{len(statuses)} resources ({sum(s.startswith('201') for s in statuses)} created, {len(stale)} stale removed)"
 
 
 def run_patient(study_id: str, pid: str, args, log) -> dict:
@@ -186,9 +209,20 @@ def cmd_run(args) -> int:
     summary = (f"synthgen {__version__} run {stamp}\nstudy: {args.study} (datahub {study['datahub_commit'][:8]})\n"
                f"tumor board date: {args.tumor_board}\npatients: {len(rows)} — " + ", ".join(f"{k} {v}" for k, v in counts.items()) +
                f"\noutputs: {DATA / 'output' / args.study}/<patient>/\nreport: {report_dir}/patients.csv, log.txt\n")
+    from synthgen import catalog
+    cat, n = catalog.write_catalog(DATA / "output" / args.study, DATA / "harvest" / args.study)
+    summary += f"case catalog: {cat} ({n} patients)\n"
     (report_dir / "summary.txt").write_text(summary)
     print("\n" + summary + "".join(f"  refused {r['patient']}: {r['reason']}\n" for r in rows if r["status"] == "refused"), end="")
     return 0 if not any(r["status"] == "failed" for r in rows) else 1
+
+
+def cmd_catalog(args) -> int:
+    study_or_exit(args.study)
+    from synthgen import catalog
+    cat, n = catalog.write_catalog(DATA / "output" / args.study, DATA / "harvest" / args.study)
+    print(f"{cat} ({n} patients; also cases.csv)")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -221,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="load bundles to this FHIR server (no URL: FHIR_SERVER_URL from .env)")
     r.add_argument("--load-mongo", action="store_true", help="load Mongo records (MONGO_URI, MONGO_DB from .env); replaces each patient's records")
     r.set_defaults(func=cmd_run)
+
+    c = sub.add_parser("catalog", help="(re)write the study's case catalog (cases.md, cases.csv)")
+    c.add_argument("--study", required=True, help="a supported study id")
+    c.set_defaults(func=cmd_catalog)
 
     args = parser.parse_args(argv)
     return args.func(args)

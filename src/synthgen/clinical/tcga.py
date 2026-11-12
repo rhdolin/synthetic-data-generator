@@ -60,7 +60,7 @@ class Builder:
         return (self.d0 + dt.timedelta(days=int(day))).isoformat()
 
     def rid(self, suffix: str) -> str:
-        return f"mtb-{self.key}-{suffix}"
+        return F.safe_id(f"mtb-{self.key}-{suffix}")
 
     def add(self, r: dict) -> dict:
         r.setdefault("subject", None)
@@ -379,6 +379,8 @@ class Builder:
         for t in drugs:
             start = int(t["START_DATE"])
             agent = (t.get("AGENT") or "").strip()
+            if agent.lower() in ("", "nos", "not otherwise specified"):  # TCGA "Nos": drug not recorded
+                agent = f"Unspecified {(t.get('TREATMENT_TYPE') or 'therapy').lower()}"
             n = regimens.index(start) + 1
             later = [d for d in starts if d > start]
             stop = int(t["STOP_DATE"]) if t.get("STOP_DATE") else None
@@ -537,15 +539,41 @@ class Builder:
         sex = "woman" if self.pt["SEX"].lower() == "female" else "man"
         stage = self.pt.get("AJCC_PATHOLOGIC_TUMOR_STAGE", "").replace("STAGE ", "stage ")
         cancer = self.sample.get("CANCER_TYPE_DETAILED", "cancer").lower()
-        regs = []
-        for d in sorted({int(t["START_DATE"]) for t in self.treat if not (t.get("AGENT") or "").startswith("Radiation")}):
-            regs.append("/".join(t["AGENT"].lower() for t in self.treat if int(t["START_DATE"]) == d))
+        drugs = [t for t in self.treat if not (t.get("AGENT") or "").startswith("Radiation")]
+        starts = sorted({int(t["START_DATE"]) for t in drugs})
+        name = lambda t: ("unspecified " + (t.get("TREATMENT_TYPE") or "therapy").lower()
+                          if (t.get("AGENT") or "").strip().lower() in ("", "nos") else t["AGENT"].lower())
+        regs = ["/".join(name(t) for t in drugs if int(t["START_DATE"]) == d) for d in starts]
+        active = [r for r in self.resources if r["resourceType"] == "MedicationRequest" and r["status"] == "active"]
         statuses = sorted((x["effectiveDateTime"], x["valueCodeableConcept"]["coding"][0]["code"]) for x in self.resources
                           if x["resourceType"] == "Observation" and x["id"].startswith(self.rid("disease-status")))
-        status = "progressing" if statuses and statuses[-1][1] == "271299001" else "under treatment"
+        progressing = bool(statuses) and statuses[-1][1] == "271299001"
         markers = f" ({', '.join(self.key_biomarkers)})" if self.key_biomarkers else ""
-        note = (f"{age}-year-old {sex} with {stage} {cancer}{markers}, now {status} after {len(regs)} line"
-                f"{'s' if len(regs) != 1 else ''} of therapy ({', '.join(regs)}). Presented for next-line treatment recommendation.")
+        lines = f"{len(regs)} line{'s' if len(regs) != 1 else ''} of therapy ({', '.join(regs)})"
+        events = " ".join(st["STATUS"] for st in self.status)
+        extent = ("metastatic " if "Metastasis" in events else "recurrent " if "Recurrence" in events else "")
+        bio = ", ".join(self.key_biomarkers)
+        if extent:
+            head = f"{age}-year-old {sex} with {extent}{cancer} (initially {stage}" + (f"; {bio})" if bio else ")")
+        else:
+            head = f"{age}-year-old {sex} with {stage} {cancer}{markers}"
+        if progressing and regs:
+            course, ask = f"now progressing after {lines}", "next-line treatment recommendation"
+        elif progressing:
+            course, ask = "now with disease progression, no systemic therapy to date", "treatment recommendation"
+        elif active:
+            current = "/".join(sorted({m["medicationCodeableConcept"].get("text", "").lower() for m in active}))
+            course = f"currently on {current}" + (f" after {len(regs) - 1} prior line{'s' if len(regs) - 1 != 1 else ''} of therapy" if len(regs) > 1 else "")
+            ask = "review of treatment in light of tumor genomic results"
+        elif regs:
+            course = f"after completing {lines}" + ("" if extent else ", with no evidence of progression")
+            ask = "review of treatment options in light of tumor genomic results"
+        else:
+            proc = F.PROCUREMENT.get(self.procurement, (None, ""))[1]
+            months = max(0, round(((self.board - self.d0).days - self.resection_day()) / 30.4))
+            course = (f"status post {proc} {months} months ago, " if proc else "") + "no evidence of recurrence, no systemic therapy to date"
+            ask = "treatment recommendation in light of tumor genomic results"
+        note = f"{head}, {course}. Presented for {ask}."
         r = syn.rng(self.mrn, "board-request")
         self.add(F.resource("ServiceRequest", self.rid("tumor-board"),
                             status="active", intent="order",
@@ -563,6 +591,7 @@ def build_patient(harvest_root: Path, study_id: str, patient_id: str, out_root: 
     out = out_root / study_id / patient_id / f"{patient_id}-transaction-bundle.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(bundle, indent=2) + "\n")
+    (out.parent / "notes.json").write_text(json.dumps(b.notes, indent=1) + "\n")
     if b.mongo:
         mongo_dir = out.parent / "mongo"
         mongo_dir.mkdir(exist_ok=True)

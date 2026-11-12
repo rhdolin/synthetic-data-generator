@@ -27,6 +27,24 @@ CHANGE_TYPE_SO = {"SNV": ("SO:0001483", "SNV"), "MNV": ("SO:0002007", "MNV"), "I
                   "DEL": ("SO:0000159", "deletion"), "CNV": ("SO:0001019", "copy_number_variation")}
 
 
+FUSION_DRIVERS = {"ALK", "ROS1", "RET", "NTRK1", "NTRK2", "NTRK3", "NRG1", "FGFR1", "FGFR2", "FGFR3", "BRAF", "MET"}
+
+
+def fusion_rows(rows: list[dict], reportable: set[str]) -> list[dict]:
+    """Reportable fusions, one per gene pair. cBioPortal lists the reciprocal breakpoints of one rearrangement
+    as two rows (CD74-ROS1 and ROS1-CD74); keep the orientation with the driver/reportable gene as the 3' partner."""
+    by_pair: dict[frozenset, list[dict]] = {}
+    for f in rows:
+        g1, g2 = f.get("Site1_Hugo_Symbol"), f.get("Site2_Hugo_Symbol")
+        if g1 in reportable or g2 in reportable:
+            by_pair.setdefault(frozenset((g1, g2)), []).append(f)
+    keep = []
+    for group in by_pair.values():
+        rank = lambda f: (f.get("Site2_Hugo_Symbol") not in FUSION_DRIVERS, f.get("Site2_Hugo_Symbol") not in reportable)
+        keep.append(sorted(group, key=rank)[0])
+    return keep
+
+
 def site_phrase(display: str) -> str:
     """'Structure of lower lobe of right lung' -> 'right lower lobe'."""
     m = re.match(r"Structure of (upper|middle|lower) lobe of (right|left) lung", display)
@@ -66,13 +84,25 @@ class Genomics:
         b = self.b
         self.pathologist = self.practitioner("pathologist", "Pathology")
         self.radiologist = self.practitioner("radiologist", "Radiology")
-        self.lab = b.add(F.resource("Organization", b.rid("lab"), name="Synthetic Genomics Laboratory", active=True))
+        # one lab shared by all patients (a fixed id): identical per-patient copies are rejected by servers
+        # that refuse duplicate content (e.g. the public HAPI server), and one lab is also more realistic
+        self.lab = b.add(F.resource("Organization", "mtb-synthetic-genomics-lab", name="Synthetic Genomics Laboratory", active=True,
+                                    identifier=[{"system": "http://elimu.io/fhir/organization", "value": "synthetic-genomics-lab"}]))
         self.pathology_report()
         self.imaging_reports()
+        from synthgen.clinical import imaging
+        reports = [r for r in b.resources if r["resourceType"] == "DiagnosticReport"]
+        path = next((r for r in reports if r["id"] == b.rid("pathology-report")), None)
+        imaging.link(b, path, [r for r in reports if r["id"].startswith(b.rid("imaging-"))])
         self.genomic()
 
     # --- reports (D22) -----------------------------------------------------------------
     def report(self, suffix, category, code, day, issued_days, performer, conclusion, **extra):
+        rid = self.b.rid(suffix)
+        existing = next((r for r in self.b.resources if r["id"] == rid), None)
+        if existing:  # one study per day: a second finding on the same day joins the existing report
+            existing["conclusion"] += " " + conclusion
+            return existing
         return self.b.add(F.resource(
             "DiagnosticReport", self.b.rid(suffix), F.USCORE + "us-core-diagnosticreport-note",
             status="final", category=[F.cc(F.LOINC, *category)], code=F.loinc(*code), subject=self.b.subject,
@@ -153,10 +183,9 @@ class Genomics:
             if d["gene"] in self.genes:
                 reported.append({"kind": "amplification" if d["call"] == "amplification" else "deletion",
                                  "gene": d["gene"], "detail": d})
-        for f in records.read_rows(b.dir / "data_sv.txt"):
+        for f in fusion_rows(records.read_rows(b.dir / "data_sv.txt"), self.genes):
             g1, g2 = f.get("Site1_Hugo_Symbol"), f.get("Site2_Hugo_Symbol")
-            if g1 in self.genes or g2 in self.genes:
-                reported.append({"kind": "fusion", "gene": f"{g1}-{g2}", "genes": (g1, g2), "row": f})
+            reported.append({"kind": "fusion", "gene": f"{g1}-{g2}", "genes": (g1, g2), "row": f})
         self.reported = reported
         obs = [self.variant_observation(v) for v in reported]
         implications = civic.select(reported, b.sample["ONCOTREE_CODE"])
@@ -166,8 +195,14 @@ class Genomics:
         study = self.genomic_study(test)
         markers = [r for r in b.resources if r["id"] in (b.rid("tmb"), b.rid("msi"))]
         self.genomics_report(test, region, obs, imp_obs, markers + ([pd] if pd else []), study, reported, implications)
-        b.key_biomarkers = sorted({f"{c['variant']['gene']} {c['variant'].get('protein_short', c['variant']['kind'])}"
-                                   for c in implications if c["significance"] == "Sensitivity/Response"})
+        # for the tumor board note: standard lung drivers, or anything with level-A evidence
+        drivers = {"EGFR", "ALK", "ROS1", "KRAS", "BRAF", "MET", "RET", "ERBB2", "NTRK1", "NTRK2", "NTRK3", "NRG1"}
+        def label(v):
+            if v["kind"] == "fusion":
+                return f"{v['gene']} fusion"
+            return f"{v['gene']} {v.get('protein_short') or v['kind']}"
+        b.key_biomarkers = sorted({label(c["variant"]) for c in implications if c["significance"] == "Sensitivity/Response"
+                                   and (c["level"] == "A" or set(c["variant"].get("genes") or [c["variant"]["gene"]]) & drivers)})
         self.notes.append(f"genomic: {len(muts)} PASS mutations, {len(cnvs)} CNV records, {len(conseq)} MolecConseq; "
                           f"reported {len(reported)}; implications {len(implications)}")
 

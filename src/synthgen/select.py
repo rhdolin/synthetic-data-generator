@@ -13,7 +13,7 @@ from pathlib import Path
 
 from synthgen.genomic import civic
 
-PROTEIN_ALTERING_EXCLUDED = {"Silent", "Intron", "3'UTR", "5'UTR", "3'Flank", "5'Flank", "IGR", "RNA"}
+from synthgen.genomic.records import PROTEIN_CHANGING
 FEATURES = ("actionable_variant", "fusion", "imaging", "radiology", "treatment_timeline", "recurrence_or_metastasis",
             "prior_cancer", "rna")
 
@@ -53,10 +53,12 @@ def candidates(snapshot: Path, study: dict, cache_dir: Path = Path("data/cache")
     actionable = defaultdict(set)
     with open(snapshot / "data_mutations.txt", newline="") as fh:
         for m in csv.DictReader((l for l in fh if not l.startswith("#")), delimiter="\t"):
-            if m["FILTER"] != "PASS" or m["Hugo_Symbol"] not in genes or m["Variant_Classification"] in PROTEIN_ALTERING_EXCLUDED:
+            if m["FILTER"] != "PASS" or m["Hugo_Symbol"] not in genes or m["Variant_Classification"] not in PROTEIN_CHANGING:
                 continue
             gene, p = m["Hugo_Symbol"], (m.get("HGVSp_Short") or "").removeprefix("p.")
-            if f"{gene} {p}" in evidence:
+            names = civic.mutation_names(gene, p, m["Variant_Classification"], m.get("EXON") or m.get("Exon_Number", ""))
+            names.discard(f"{gene} Mutation")  # "actionable" here means variant-specific evidence
+            if any(civic.profile_matches(e, names) for e in evidence):
                 actionable[sample_of.get(m["Tumor_Sample_Barcode"], m["Tumor_Sample_Barcode"][:12])].add(f"{gene} {p}")
     amp_profiles = {e.split(" ")[0] for e in evidence if e.endswith(" Amplification")}
     cna = snapshot / "data_cna.txt"
@@ -70,9 +72,10 @@ def candidates(snapshot: Path, study: dict, cache_dir: Path = Path("data/cache")
                         if v == "2":
                             actionable[sample_of.get(sid, sid[:12])].add(f"{row[0]} amplification")
     fusions = defaultdict(set)
-    for f in _rows(snapshot / "data_sv.txt"):
+    from synthgen.clinical.genomics import fusion_rows
+    for f in fusion_rows(_rows(snapshot / "data_sv.txt"), genes):
         a, b = f.get("Site1_Hugo_Symbol"), f.get("Site2_Hugo_Symbol")
-        if a in genes or b in genes:
+        if True:
             pid = sample_of.get(f["Sample_Id"], f["Sample_Id"][:12])
             fusions[pid].add(f"{a}-{b}")
             if {f"{a}::{b} Fusion", f"v::{b} Fusion", f"{a}::v Fusion"} & evidence:

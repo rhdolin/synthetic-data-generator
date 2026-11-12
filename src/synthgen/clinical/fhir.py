@@ -5,6 +5,8 @@ Codes were checked on tx.fhir.org / RxNav on 2026-11-09/10 (see docs/mapping.md)
 
 from __future__ import annotations
 
+import re
+
 MCODE = "http://hl7.org/fhir/us/mcode/StructureDefinition/"
 USCORE = "http://hl7.org/fhir/us/core/StructureDefinition/"
 SCT = "http://snomed.info/sct"
@@ -60,7 +62,14 @@ def ref(resource: dict) -> dict:
     return {"reference": f"{resource['resourceType']}/{resource['id']}"}
 
 
+def safe_id(rid: str) -> str:
+    """FHIR ids: letters, digits, '-' and '.', at most 64 characters."""
+    rid = re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9.-]+", "-", rid)).strip("-")
+    return rid[:64].rstrip("-")
+
+
 def resource(rtype: str, rid: str, profile: str | None = None, **body) -> dict:
+    rid = safe_id(rid)
     meta = {"tag": [TAG]}
     if profile:
         meta["profile"] = [profile if profile.startswith("http") else MCODE + profile]

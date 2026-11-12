@@ -279,6 +279,14 @@ Not generated: comorbidities, medications other than cancer treatment, family hi
 
 All: `category` LOINC `LP29684-5` "RAD" ✓; `status` final; `issued` same day; `performer` the radiologist; `subject`. For TCGA-J2-8194: CT chest before diagnosis; bone scan at day 470 (her rule-filled metastasis is bone; she also has a real nuclear-medicine study in IDC); restaging CT at day 724.
 
+## Linking reports to real images (Bob, 2026-11-11)
+
+Researchers want to point imaging AI at the metastasis and progression scans, so reports link to the patient's real IDC images **best effort**, with the caveat stated in the README:
+- **Pathology report → slide study** (`DiagnosticReport.imagingStudy`).
+- **Radiology by the real gaps between scans** (study dates from IDC's DICOMweb service): scans within 90 days of the patient's first scan are the staging workup → the staging report; only clearly later scans → the metastasis/progression/restaging reports, in date order; extra scans to the last report. TCGA radiology is almost all pre-surgery baseline, so most metastasis/progression reports get no image (LUAD: only TCGA-38-6178's progression report, a PET/CT 4.5 months after the first scan). A nuclear-medicine study goes to a bone-scan report only if its description says bone.
+- **ImagingStudy** per real study: `identifier` `urn:dicom:uid` / `urn:oid:<StudyInstanceUID>`; `modality` (DICOM: CT, PT, NM, SM); `series` UIDs; `started` = the linked report's date on the shifted timeline (not the DICOM date); `note` with the IDC viewer URL and the real DICOM study date (what the viewer shows); `endpoint` → one shared `Endpoint/nci-idc-dicomweb` (DICOMweb, IDC's viewer proxy).
+- Examples: TCGA-50-8459's real CT → staging report, PET/CT → recurrence report; TCGA-J2-8194's lung perfusion scan → staging report.
+
 # Genomic: cBioPortal → Mongo records (D2, D3, D15, D21)
 
 **Status: draft 1, 2026-11-10.** Records for the Genomics Operations server's `FHIRGenomicsData` database, written as JSON (one file per collection) and loaded later. Shapes follow the existing records (`genomics-operations/utilities/vcf2json.py`, `patient_tests.json`) and the Google Doc schema. Worked example: TCGA-J2-8194. Fusions are **not** here (D20).
@@ -390,7 +398,7 @@ None generated: TCGA WES tests use the server's existing `Default.WES.GRCh37.bed
 
 ## Variant Observations (`mcode-genomic-variant`), one per reported variant
 
-**Which:** PASS mutations, ±2 copy-number calls and fusions (D20), in the 228 reportable genes (for fusions: either partner).
+**Which:** PASS **protein-changing** mutations (missense, nonsense, frameshift, in-frame, splice site, nonstop, start site; not synonymous or splice-region-only), ±2 copy-number calls and fusions (D20), in the 228 reportable genes (for fusions: either partner). The same protein-changing rule gates CIViC's gene-level "Mutation" evidence (a synonymous EGFR variant had matched "EGFR Mutation").
 
 | Component | Mutation (KRAS G12C) | Copy number (PDGFRA amp) |
 |---|---|---|
@@ -439,7 +447,7 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 
 **Rule** (Bob, 2026-11-10):
 1. **Evidence:** predictive, accepted, direction "supports", **level A or B** only.
-2. **Variant match:** the CIViC molecular profile matches a reported variant: gene + protein change (e.g. "KRAS G12C"); "GENE Amplification"; fusions as "A::B Fusion" or partner-agnostic "v::B Fusion" / "A::v Fusion" (e.g. "v::ALK Fusion"). Gene-level "GENE Mutation" only when nothing variant-specific matches.
+2. **Variant match:** the CIViC molecular profile matches a reported variant: gene + protein change (e.g. "KRAS G12C"); **exon-level categories** derived from the MAF exon and type ("EGFR Exon 19 Deletion" for an in-frame deletion in exon 19, "… Exon N Insertion", "MET Exon 14 Skipping Mutation" for MET splice-site calls); "GENE Amplification"; fusions as "A::B Fusion" or partner-agnostic "v::B Fusion" / "A::v Fusion". **"A OR B" profiles** match if any part matches; profiles with AND / NOT never match (conditions we can't check). Gene-level "GENE Mutation" only when nothing more specific matches (and only for protein-changing variants).
 3. **Same tumor type:** the evidence's disease is the patient's tumor type. For LUAD: lung adenocarcinoma, non-small cell lung carcinoma or lung cancer (DOID 3910, 3908, 1324); not other cancers, and not pan-cancer ("Cancer", "Solid Tumor").
 4. **Per variant: at most 2 sensitivity therapies**, highest level first, **plus resistance evidence** (the highest-level resistance item, if any). Ties at the same level (Bob, 2026-11-10): **a therapy available in the US beats an experimental one**, checked in RxNorm: every drug in the therapy has marketed clinical-drug products (SCD/SBD) via RxNav; an experimental drug has none (often not in RxNorm at all). If still tied, **include both**; an extra implication is fine.
 5. **Drugs** to RxNorm via RxNav; combinations listed together.
@@ -470,6 +478,8 @@ Plus: `code` `69548-6`, value `LA9633-4` Present, `method` `LA26398-0` Sequencin
 | `Site1/2_Chromosome`, `_Position`, `NCBI_Build` | — | **Not used:** coordinates are labelled GRCh37 but fit GRCh38 (Q12 findings); genes alone identify the fusion |
 | *(derived)* | `specimen` → tumor Specimen; `effectiveDateTime` = genomic test date; `subject`; `method` LOINC `LA26398-0` "Sequencing" | Same test as the other variants |
 
+**Reciprocal pairs** (Bob, 2026-11-11): cBioPortal lists the two breakpoints of one rearrangement as two rows (CD74-ROS1 and ROS1-CD74); they become **one** fusion, oriented with the driver or reportable gene as the 3′ partner (CD74-ROS1, EML4-ALK, CCDC6-RET).
+
 **Which fusions are reported** (decided, Bob 2026-11-10): a fusion goes in the report if **either partner is one of the 228 reportable genes** (D6). In-frame is not required. TCGA-J2-8194's only fusion, AGPAT3-APP, has neither gene, so this patient's report has no fusion.
 
 # Data quirks: `luad_tcga_pan_can_atlas_2018` (datahub `a8ea891`)
@@ -496,3 +506,4 @@ Found by reading every file of the snapshot (2026-11-09). The ones that affect m
 18. **HM450 meta description** ("one probe per gene") doesn't match the file (all 396k probes).
 19. **MAF:** `t_depth` ≠ ref + alt in 31% of rows; `Transcript_ID` ≠ `Feature` in 20%; `Entrez_Gene_Id` = 0 in 10,492 rows; 1 duplicate row.
 20. **Segment file uses chromosome `23` for X**; the MAF uses `X`.
+21. **Loading lessons (2026-11-11):** the public HAPI server rejects a *new* resource whose content duplicates an existing one, so shared things (the genomic lab) are one Organization with a fixed id (`mtb-synthetic-genomics-lab`), not a copy per patient. The CNA matrix's repeated gene symbols (17) must be de-duplicated per patient before writing CNV records (one `_id` per gene).

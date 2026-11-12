@@ -11,7 +11,9 @@ from pathlib import Path
 
 from synthgen.genomic import annotate as A
 
-NON_PROTEIN = {"Silent", "Intron", "3'UTR", "5'UTR", "3'Flank", "5'Flank", "IGR", "RNA"}
+# Reportable / matchable: changes the protein. Excludes synonymous and splice-region-only variants.
+PROTEIN_CHANGING = {"Missense_Mutation", "Nonsense_Mutation", "Frame_Shift_Del", "Frame_Shift_Ins", "In_Frame_Del",
+                    "In_Frame_Ins", "Splice_Site", "Nonstop_Mutation", "Translation_Start_Site"}
 SV_MIN_LENGTH = 50  # indels longer than this are structural variants (no SPDI)
 # Outside any gene: the MAF still names a nearby gene for flanking variants, but the variant isn't in it
 OUTSIDE_GENE = {"IGR", "5'Flank", "3'Flank"}
@@ -123,7 +125,7 @@ def mutations(extract: Path, test: dict, notes: list | None = None) -> tuple[lis
                                           "display": "loss_of_function_variant"}]
             conseq.append(c)
         details.append({"variant": rec, "maf": m, "gene": m["Hugo_Symbol"], "mane": mane_tc,
-                        "protein_altering": m["Variant_Classification"] not in NON_PROTEIN})
+                        "protein_altering": m["Variant_Classification"] in PROTEIN_CHANGING})
     return variants, conseq, details
 
 
@@ -133,7 +135,11 @@ def copy_numbers(extract: Path, test: dict, sample_id: str) -> tuple[list[dict],
         rd = csv.reader(fh, delimiter="\t")
         header = next(rd)
         col = header.index(sample_id)
-        calls = [(r[0], int(r[col])) for r in rd if r[col] in ("2", "-2")]
+        calls, seen = [], set()
+        for r in rd:  # the matrix repeats some gene symbols (data quirk 17): keep the first call per gene
+            if r[col] in ("2", "-2") and r[0] not in seen:
+                seen.add(r[0])
+                calls.append((r[0], int(r[col])))
     if not calls:
         return [], []
     coords = A.gene_coords([g for g, _ in calls])

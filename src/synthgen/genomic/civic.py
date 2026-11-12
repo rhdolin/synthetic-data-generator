@@ -28,15 +28,29 @@ def release_rows(release: str = RELEASE) -> list[dict]:
         return list(csv.DictReader(fh, delimiter="\t"))
 
 
+def mutation_names(gene: str, protein_short: str, classification: str, exon: str) -> set[str]:
+    """CIViC profile names a protein-changing mutation matches: protein change, exon-level category, gene level."""
+    names = {f"{gene} Mutation"}
+    if protein_short:
+        names.add(f"{gene} {protein_short}")
+    n = (exon or "").split("/")[0]
+    if n.isdigit():
+        if classification == "In_Frame_Del":
+            names.add(f"{gene} Exon {n} Deletion")
+        elif classification == "In_Frame_Ins":
+            names.add(f"{gene} Exon {n} Insertion")
+    if gene == "MET" and (classification == "Splice_Site" or (classification == "In_Frame_Del" and n == "14")):
+        names.add("MET Exon 14 Skipping Mutation")  # MET splice-site calls in lung are almost all exon 14 skipping
+    return names
+
+
 def profiles_for(v: dict) -> set[str]:
     """CIViC molecular-profile names a reported variant matches."""
     gene = v["gene"]
     if v["kind"] == "mutation":
-        names = {f"{gene} Mutation"}
-        p = v.get("protein_short")
-        if p:
-            names.add(f"{gene} {p}")
-        return names
+        maf = (v.get("detail") or {}).get("maf", {})
+        return mutation_names(gene, v.get("protein_short", ""), maf.get("Variant_Classification", ""),
+                              maf.get("EXON") or maf.get("Exon_Number", ""))
     if v["kind"] == "amplification":
         return {f"{gene} Amplification"}
     if v["kind"] == "fusion":
@@ -44,6 +58,14 @@ def profiles_for(v: dict) -> set[str]:
         # CIViC names partner-agnostic fusions with "v" (any partner), e.g. "v::ALK Fusion"
         return {f"{a}::{b} Fusion", f"v::{b} Fusion", f"{a}::v Fusion", f"{b} Fusion", f"{a} Fusion"}
     return set()
+
+
+def profile_matches(profile: str, names: set[str]) -> bool:
+    """A profile matches if it is one of the names, or an "A OR B" profile with any part among them.
+    Profiles with AND / NOT need conditions we can't check, so they never match."""
+    if " AND " in profile or "NOT " in profile:
+        return False
+    return any(part.strip(" ()") in names for part in profile.split(" OR "))
 
 
 def therapies_of(row: dict) -> list[list[dict]]:
@@ -62,9 +84,10 @@ def select(reported: list[dict], oncotree: str, release: str = RELEASE) -> list[
     out = []
     for v in reported:
         names = profiles_for(v)
-        matched = [r for r in rows if r["molecular_profile"] in names]
+        matched = [r for r in rows if profile_matches(r["molecular_profile"], names)]
         # the most specific profile wins: gene-level "Mutation" only when nothing variant-specific matches
-        specific = [r for r in matched if not r["molecular_profile"].endswith(" Mutation")]
+        specific = [r for r in matched if not r["molecular_profile"].endswith(" Mutation")
+                    or r["molecular_profile"] == "MET Exon 14 Skipping Mutation"]
         matched = specific or matched
         items = []
         for r in matched:
