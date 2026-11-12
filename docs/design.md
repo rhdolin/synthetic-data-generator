@@ -12,13 +12,11 @@ Started 2026-11-08. Status: **design discussion, no code yet.**
 
 **Milestone 1 (done 2026-11-10):** one patient end to end, `TCGA-J2-8194`: mapping, FHIR bundle (validated, loaded to HAPI), Mongo records (loaded, checked through the Operations server).
 
-**Milestone 3 (LUAD cohort), in progress:**
-1. ~~Crosswalks complete for LUAD~~ (sites, histologies, AJCC editions, procurement, prior cancers).
-2. ~~10 varied test patients built and validated~~; gaps fixed (large indels as SVs, ALK "v::" fusions, etc.).
-3. ~~One command (`synthgen studies / patients / run`), patient selection (D23: living only), run report~~ (2026-11-11).
-4. Next: a cohort run (~20 patients) and loading them; Bob reviews in the MTB app.
+**Milestone 3 (LUAD cohort): done** (2026-11-11). Crosswalks, 10 test patients, one command (`synthgen studies / patients / run`), selection (D23: living only), run report and case catalog; 29 patients built, validated and loaded; reports linked to real IDC images (best effort).
 
-**Then:** milestone 2, the imaging patient (needs Q16, Q17); milestone 4, colorectal (D17; includes the MTB app's colorectal terminology updates); milestone 5, distribution (packaging, "Supported studies" docs kept current).
+**Milestone 4 (colorectal, D17): done** (2026-11-12). Colorectal crosswalks; rules that apply to every study (pM1 at diagnosis, recurrences from GDC, lines of therapy T5, CEA and MMR IHC, MSI only when both scores agree, tumor-agnostic level-A evidence, one resistance implication per drug); 4 test patients reviewed, then 31 patients built, validated and loaded. The MTB app's colorectal terminology updates are on Bob's list.
+
+**Then:** milestone 2, the imaging patient (needs Q16, Q17); milestone 5, distribution (packaging, "Supported studies" docs kept current).
 
 Each step starts when Bob says so.
 
@@ -415,6 +413,7 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
   - treat the history as past and focus the demo on the tumor board's next-step recommendation
 - **Q16. Where the imaging AI pipeline lives** (Bob, 2026-11-09: to come back to): in this repository or in the MTB app? Either way this repository supplies the downloaded images, key images and FHIR pointers (see "Imaging").
 - **Q17. Image rendering in the MTB app** (Bob, 2026-11-09: to come back to): key images plus a link to IDC's viewer, or a full interactive viewer in the app from the start? See "Imaging" options (a)–(c).
+- **Q19. Wild-type biomarkers** (Bob, 2026-11-12: on the MTB backlog). In colorectal cancer, RAS/BRAF wild-type is what makes a patient a candidate for cetuximab or panitumumab, but CIViC evidence can't express "no RAS mutation", so these patients get no implication. The MTB app will handle it by layering in Cat-VRS and using the GenomicStudy (gene studied, no variant reported = wild type). Nothing to do in this pipeline for now.
 - ~~Q18. Genomics Reporting 2.0.0 vs 3.0.0~~: **decided (Bob, 2026-11-10): keep the mix.** Everything follows Genomics Reporting 2.0.0 (mCODE 4.0.0, the MTB app, the Operations server) except GenomicStudy, GenomicStudyAnalysis and the report's `genomic-study-reference` extension (3.0.0). Validate with both IGs loaded; the cross-version errors on the 2.0.0 implication code are expected. Known effect: the MTB app shows both Procedures on the treatment timeline (GenomicStudyAnalysis as an unlabeled "Procedure"); Bob is tracking an app tweak to skip them.
 - **Q13. Error tolerance.** Where is the line between "minor: load and log" and "serious: skip the patient"? Proposed starting point: anything that breaks loading, the Operations or report/server consistency is serious; unmapped codes, missing optional fields and validator warnings are minor.
 - ~~Q7. Genetic reports in FHIR~~: yes, filtered to the 228 reportable genes (D6).

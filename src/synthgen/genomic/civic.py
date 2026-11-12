@@ -3,6 +3,7 @@
 Rule (Bob, 2026-11-10): predictive, accepted, "Supports", level A or B, the patient's tumor type.
 Tumor-agnostic evidence ("Cancer", DOID:162, or "Solid Tumor") also counts, at level A only: the tissue-agnostic
 approvals (NTRK, RET, BRAF V600E) without the many gene-level level-B pan-cancer items (Bob, 2026-11-12).
+Per patient, at most one resistance implication per drug (the strongest evidence).
 Per variant: at most 2 sensitivity therapies (higher level first; at the same level a US-marketed
 therapy beats an experimental one; remaining ties are all kept) plus the best resistance item.
 """
@@ -95,7 +96,9 @@ def select(reported: list[dict], oncotree: str, release: str = RELEASE) -> list[
     out = []
     for v in reported:
         names = profiles_for(v)
-        matched = [r for r in rows if profile_matches(r["molecular_profile"], names)]
+        # tumor-agnostic evidence needs a specific match: "v::RET Fusion OR RET Mutation" must not match any RET missense
+        specific_names = {n for n in names if not n.endswith(" Mutation")} | ({"MET Exon 14 Skipping Mutation"} & names)
+        matched = [r for r in rows if profile_matches(r["molecular_profile"], names if r["doid"] in doids else specific_names)]
         # the most specific profile wins: gene-level "Mutation" only when nothing variant-specific matches
         specific = [r for r in matched if not r["molecular_profile"].endswith(" Mutation")
                     or r["molecular_profile"] == "MET Exon 14 Skipping Mutation"]
@@ -122,4 +125,13 @@ def select(reported: list[dict], oncotree: str, release: str = RELEASE) -> list[
         for c in picked:  # one implication per drug group
             for g in c["groups"]:
                 out.append({**c, "drugs": g})
-    return out
+    # per patient, one resistance implication per drug, from the strongest evidence (Bob, 2026-11-12):
+    # colorectal has anti-EGFR resistance evidence for many genes, so otherwise cetuximab repeats per variant
+    best: dict[tuple, dict] = {}
+    for c in (c for c in out if c["significance"] == "Resistance"):
+        drug = tuple(sorted(d["name"].lower() for d in c["drugs"]))
+        key = (c["level"], not c["marketed"], -c["rating"], -c["eid"])
+        if drug not in best or key < best[drug][0]:
+            best[drug] = (key, c)
+    keep = {id(c) for _, c in best.values()}
+    return [c for c in out if c["significance"] != "Resistance" or id(c) in keep]

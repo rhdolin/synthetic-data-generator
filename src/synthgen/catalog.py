@@ -34,7 +34,8 @@ def tumor_type(primary: dict | None) -> str:
     text = (primary.get("code", {}).get("text") or "").strip()
     sub = text.replace("Lung Adenocarcinoma", "").strip(" ,()-").replace("NOS", "").strip(" ,()")
     sub = sub.removeprefix("Lung ").removeprefix("lung ").lower()
-    if set(sub.split()) <= set(coded.lower().split()):  # e.g. "colon adenocarcinoma" adds nothing to the coded type
+    if set(sub.split()) <= set(coded.lower().split()) or sub in ("colon adenocarcinoma", "rectal adenocarcinoma"):
+        # e.g. "colon adenocarcinoma" adds nothing to the coded type
         sub = ""
     return f"{coded} — {sub}" if sub else coded
 

@@ -29,8 +29,10 @@ SUPPORTED = {
         "datahub_commit": "a8ea891da32add81fabaa8e744cf8cb72a8a0e66",
         "oncotree": "COADREAD",
         "builder": "tcga",
-        "status": "in development (milestone 4)",
-        "verified": "",
+        "status": "supported (2026-11-12)",
+        "verified": "31 patients built, validated against mCODE 4.0.0 and reviewed: colon, rectal, rectosigmoid and mucinous; "
+                    "stage I-IVB, M1 at diagnosis, up to 6 lines; AJCC 5th-7th editions; GDC recurrences, CEA and MMR IHC; "
+                    "KRAS G12C, BRAF V600E, ERBB2 amplification, MSI-high, NTRK3 fusion, WNT and hedgehog variants.",
         "caveats": [
             "Eligible: living patients with clinical data (471 of 594; D23).",
             "Metastasis sites are rule-filled unless GDC names one.",
