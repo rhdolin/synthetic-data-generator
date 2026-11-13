@@ -1,4 +1,4 @@
-"""Link reports to the patient's real images in the NCI Imaging Data Commons (design D16; Bob, 2026-11-11).
+"""Link reports to the patient's real images in the NCI Imaging Data Commons (design D16).
 
 Best effort: report texts are synthetic (D22), so a linked scan may not show what the report says.
 - Pathology report -> the slide study (the patient's own resected tumor).

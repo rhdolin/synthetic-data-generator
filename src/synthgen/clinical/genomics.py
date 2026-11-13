@@ -229,7 +229,7 @@ class Genomics:
         implications = civic.select(reported, b.sample["ONCOTREE_CODE"])
         imp_obs = [self.implication(c) for c in implications]
         region = self.region_studied()
-        pd = None if b.colorectal else self.pdl1(mdet)  # no PD-L1 for colorectal (Bob, 2026-11-12)
+        pd = None if b.colorectal else self.pdl1(mdet)  # no PD-L1 for colorectal
         study = self.genomic_study(test)
         markers = [r for r in b.resources if r["id"] in (b.rid("tmb"), b.rid("msi"))]
         self.genomics_report(test, region, obs, imp_obs, markers + ([pd] if pd else []), study, reported, implications)
@@ -374,7 +374,7 @@ class Genomics:
                  "valueCodeableConcept": F.cc("http://hl7.org/fhir/uv/genomics-reporting/CodeSystem/genomic-study-method-type-cs",
                                               "sequence-analysis-of-the-entire-coding-region", "Sequence analysis of the entire coding region")}]
         # fusions are reported as DNA variants (mCODE), so the analysis lists gene_fusion when the patient has one
-        # (Bob, 2026-11-12; FHIR only: Mongo holds no fusions, D20)
+        # (FHIR only: Mongo holds no fusions, D20)
         types = test["dnaChangeType"] + (["FUSION"] if any(v["kind"] == "fusion" for v in self.reported) else [])
         exts += [{"url": GR + "genomic-study-analysis-change-type", "valueCodeableConcept": F.cc(SO, *CHANGE_TYPE_SO[t])}
                  for t in types]

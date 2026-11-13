@@ -82,8 +82,8 @@ class Builder:
     STATUS_NAMES = {"Metastatic": "Distant Metastasis", "Locoregional Disease": "Locoregional Recurrence"}  # colorectal wording
 
     def disease_events(self, status: list[dict]) -> list[dict]:
-        """cBioPortal status events (wording normalized), plus dated recurrences/progressions that only GDC records
-        (decision, Bob 2026-11-12). Type unknown: progression if metastatic at diagnosis, else a recurrence."""
+        """cBioPortal status events (wording normalized), plus dated recurrences/progressions that only GDC records.
+        Type unknown: progression if metastatic at diagnosis, else a recurrence."""
         for e in status:
             e["STATUS"] = self.STATUS_NAMES.get(e["STATUS"], e["STATUS"])
         known = [int(e["START_DATE"]) for e in status if any(x in e["STATUS"] for x in ("Metastasis", "Recurrence"))]
@@ -373,7 +373,7 @@ class Builder:
                                 valueQuantity=F.qty(round(float(s["TMB_NONSYNONYMOUS"]), 1), "mutations/Mb", "1/10*6"), **common))
         if not blank(s.get("MSI_SENSOR_SCORE")):
             # MSIsensor (>10 high, 4-10 indeterminate) and MANTIS (>0.6 high, 0.4-0.6 indeterminate): a call only
-            # when both agree, otherwise indeterminate (Bob, 2026-11-12)
+            # when both agree, otherwise indeterminate
             v = float(s["MSI_SENSOR_SCORE"])
             calls = {"S": "stable" if v < 4 else "indeterminate" if v <= 10 else "high"}
             if not blank(s.get("MSI_SCORE_MANTIS")):

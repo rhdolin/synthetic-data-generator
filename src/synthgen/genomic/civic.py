@@ -1,8 +1,8 @@
 """Therapeutic implications from a pinned CIViC release (docs/mapping.md "Therapeutic implications").
 
-Rule (Bob, 2026-11-10): predictive, accepted, "Supports", level A or B, the patient's tumor type.
+Rule: predictive, accepted, "Supports", level A or B, the patient's tumor type.
 Tumor-agnostic evidence ("Cancer", DOID:162, or "Solid Tumor") also counts, at level A only: the tissue-agnostic
-approvals (NTRK, RET, BRAF V600E) without the many gene-level level-B pan-cancer items (Bob, 2026-11-12).
+approvals (NTRK, RET, BRAF V600E) without the many gene-level level-B pan-cancer items.
 Per patient, at most one resistance implication per drug (the strongest evidence).
 Per variant: at most 2 sensitivity therapies (higher level first; at the same level a US-marketed
 therapy beats an experimental one; remaining ties are all kept) plus the best resistance item.
@@ -125,7 +125,7 @@ def select(reported: list[dict], oncotree: str, release: str = RELEASE) -> list[
         for c in picked:  # one implication per drug group
             for g in c["groups"]:
                 out.append({**c, "drugs": g})
-    # per patient, one resistance implication per drug, from the strongest evidence (Bob, 2026-11-12):
+    # per patient, one resistance implication per drug, from the strongest evidence:
     # colorectal has anti-EGFR resistance evidence for many genes, so otherwise cetuximab repeats per variant
     best: dict[tuple, dict] = {}
     for c in (c for c in out if c["significance"] == "Resistance"):
