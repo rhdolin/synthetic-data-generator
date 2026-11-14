@@ -129,8 +129,29 @@ def mutations(extract: Path, test: dict, notes: list | None = None) -> tuple[lis
     return variants, conseq, details
 
 
+def _segment_for(segs: list[dict], chrom: str, gstart: int, gend: int, call: int) -> dict | None:
+    on = [s for s in segs if (s["chrom"] if s["chrom"] != "23" else "X") == chrom]
+    if not on:
+        return None
+
+    def overlap(s):
+        return min(gend, int(s["loc.end"])) - max(gstart, int(s["loc.start"])) + 1
+    hits = [s for s in on if overlap(s) > 0]
+    if hits:
+        return max(hits, key=lambda s: ((float(s["seg.mean"]) > 0) == (call > 0), overlap(s)))
+    return min(on, key=lambda s: -overlap(s))  # nearest: smallest gap
+
+
 def copy_numbers(extract: Path, test: dict, sample_id: str) -> tuple[list[dict], list[dict]]:
-    """+/-2 discrete calls as gene-level CNV records, CN estimated from the segment mean."""
+    """One CNV record per segment that holds a +/-2 gene call.
+
+    Records carry the segment's coordinates and CN, with no gene fields: a copy-number record is
+    positional. `details` stays one entry per gene and points at its segment's record.
+    Gene -> segment: among overlapping segments, prefer the one whose direction matches the call,
+    then the largest overlap; with no overlap (gaps between segments, or past the last probe),
+    the nearest segment on the chromosome. The gene's own coordinates are used instead when that
+    segment's mean points the other way from the call, or the chromosome has no segments.
+    """
     with open(extract / "data_cna.txt", newline="") as fh:
         rd = csv.reader(fh, delimiter="\t")
         header = next(rd)
@@ -144,26 +165,48 @@ def copy_numbers(extract: Path, test: dict, sample_id: str) -> tuple[list[dict],
         return [], []
     coords = A.gene_coords([g for g, _ in calls])
     segs = [s for s in read_rows(extract / "data_cna_hg19.seg") if s["ID"] == sample_id]
-    bases = A.ref_bases([f"{c[0]}:{c[1]}..{c[1]}" for c in coords.values()])
-    records, details = [], []
+
+    # group the calls by covering segment (keyed by chrom/start/end)
+    groups: dict[tuple, dict] = {}
     for gene, call in calls:
         if gene not in coords:
             continue
-        chrom, start, end = coords[gene]
-        mid = (start + end) // 2
-        seg = next((s for s in segs if (s["chrom"] if s["chrom"] != "23" else "X") == chrom
-                    and int(s["loc.start"]) <= mid <= int(s["loc.end"])), None)
-        cn = round(2 * 2 ** float(seg["seg.mean"])) if seg else (4 if call == 2 else 0)
-        cn = max(cn, 3) if call == 2 else min(cn, 1)
+        chrom, gstart, gend = coords[gene]
+        seg = _segment_for(segs, chrom, gstart, gend, call)
+        if seg and (float(seg["seg.mean"]) > 0) == (call > 0):
+            key = (chrom, int(seg["loc.start"]), int(seg["loc.end"]))
+            mean = float(seg["seg.mean"])
+        elif seg:  # the segment points the other way from the call: don't claim it, use the gene's footprint
+            key = (chrom, gstart, gend)
+            mean = float(seg["seg.mean"])  # CN still clamped to the call below
+        else:  # no segment on the chromosome: fall back to the gene's footprint
+            key = (chrom, gstart, gend)
+            mean = None
+        g = groups.setdefault(key, {"mean": mean, "genes": []})
+        g["genes"].append((gene, call))
+
+    bases = A.ref_bases([f"{c}:{s}..{s}" for c, s, _ in groups])
+    records, details = [], []
+    for (chrom, start, end), g in groups.items():
+        signs = {call for _, call in g["genes"]}
+        if g["mean"] is not None:
+            cn = round(2 * 2 ** g["mean"])
+        else:
+            cn = 4 if signs == {2} else 0
+        if signs == {2}:
+            cn = max(cn, 3)
+        elif signs == {-2}:
+            cn = min(cn, 1)
         rec = {
-            "_id": stable_id(test["testID"], "CNV", gene), "patientID": test["patientID"], "testDate": test["testDate"],
-            "testID": test["testID"], "specimenID": test["specimenID"], "genomicBuild": test["genomicBuild"],
+            "_id": stable_id(test["testID"], "CNV", f"{chrom}:{start}-{end}"), "patientID": test["patientID"],
+            "testDate": test["testDate"], "testID": test["testID"], "specimenID": test["specimenID"],
+            "genomicBuild": test["genomicBuild"],
             "CHROM": f"chr{chrom}", "POS": start - 1, "REF": bases[f"{chrom}:{start}..{start}"], "END": end,
             "FILTER": "PASS", "SVTYPE": "CNV", "CN": cn, "genomicSourceClass": "somatic",
-            "geneCode": A.hgnc_id(gene), "geneDesc": gene,
         }
         records.append(rec)
-        details.append({"variant": rec, "gene": gene, "call": "amplification" if call == 2 else "deep deletion"})
+        for gene, call in g["genes"]:
+            details.append({"variant": rec, "gene": gene, "call": "amplification" if call == 2 else "deep deletion"})
     return records, details
 
 

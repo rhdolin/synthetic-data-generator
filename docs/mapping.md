@@ -345,15 +345,19 @@ Researchers want to point imaging AI at the metastasis and progression scans, so
 
 ## Variants: copy number (from `data_cna.txt` + `data_cna_hg19.seg`)
 
-| Field | Source / transform | PDGFRA example |
+**One record per segment, not per gene** (2026-11-13). A copy-number record is positional: it carries the segment's coordinates, and every ±2 gene on that segment points to the same record. For example, ERBB2 in TCGA-EI-6509 is one record (chr17 37,813,856–38,047,471, CN 27) shared by 10 genes. The report's variant Observations stay one per gene (ERBB2 amplification); each one's outer start-end and copy number come from its segment's record.
+
+**Gene → segment:** among the segments the gene (Ensembl GRCh37 coordinates) overlaps, prefer one whose direction matches the call, then the largest overlap. If none overlaps (small gaps between segments, or genes past a chromosome's last probe), use the nearest segment on that chromosome. **Fall back to the gene's own coordinates** when that segment's mean points the other way from the call (e.g. KIT +2 in TCGA-J2-8194 sits in a −0.06 segment) or the chromosome has no segments.
+
+| Field | Source / transform | Example |
 |---|---|---|
-| *(which calls)* | genes with a discrete call of **+2 (amplification) or −2 (deep deletion)**; ±1 (low-level gain/loss) left out | PDGFRA +2, KIT +2 |
-| `CHROM`, `POS`, `END` | the gene's GRCh37 coordinates (Ensembl GRCh37 lookup), POS 0-based | |
+| *(which calls)* | genes with a discrete call of **+2 (amplification) or −2 (deep deletion)**; ±1 (low-level gain/loss) left out; one record per segment holding such a call | PDGFRA +2, KIT +2 |
+| `CHROM`, `POS`, `END` | the segment's coordinates (or the gene's, in the fallback cases above), POS 0-based | ERBB2 segment: chr17, 37813855, 38047471 |
 | `REF` | the reference base at `POS` (required by the schema) | |
 | `SVTYPE` | `CNV` | |
-| `CN` | estimated copy number from the overlapping segment: round(2 × 2^`seg.mean`), at least 3 for +2 and at most 1 for −2 | e.g. seg.mean 1.1 → 4 |
+| `CN` | estimated copy number from the segment: round(2 × 2^`seg.mean`), at least 3 for +2 and at most 1 for −2 | e.g. seg.mean 1.1 → 4; ERBB2 3.77 → 27 |
 | `FILTER`, `genomicSourceClass`, test fields | `PASS`, `somatic`, from the Tests record | |
-| `geneCode`, `geneDesc` | HGNC ID and symbol | |
+| `geneCode`, `geneDesc` | **not set**: a segment can span many genes, and the fields hold one | |
 
 ## MolecConseq (one or two per mutation; none for copy number, as in the existing data)
 
@@ -538,7 +542,7 @@ Found by reading every file of the snapshot (2026-11-09). The ones that affect m
 18. **HM450 meta description** ("one probe per gene") doesn't match the file (all 396k probes).
 19. **MAF:** `t_depth` ≠ ref + alt in 31% of rows; `Transcript_ID` ≠ `Feature` in 20%; `Entrez_Gene_Id` = 0 in 10,492 rows; 1 duplicate row.
 20. **Segment file uses chromosome `23` for X**; the MAF uses `X`.
-21. **Loading lessons (2026-11-11):** the public HAPI server rejects a *new* resource whose content duplicates an existing one, so shared things (the genomic lab) are one Organization with a fixed id (`mtb-synthetic-genomics-lab`), not a copy per patient. The CNA matrix's repeated gene symbols (17) must be de-duplicated per patient before writing CNV records (one `_id` per gene).
+21. **Loading lessons (2026-11-11):** the public HAPI server rejects a *new* resource whose content duplicates an existing one, so shared things (the genomic lab) are one Organization with a fixed id (`mtb-synthetic-genomics-lab`), not a copy per patient. The CNA matrix's repeated gene symbols (17) must be de-duplicated per patient before matching calls to segments (first call per gene kept).
 
 # Data quirks: `coadread_tcga_pan_can_atlas_2018` (datahub `a8ea891`)
 
