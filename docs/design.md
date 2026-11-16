@@ -16,7 +16,7 @@ Started 2026-11-08. Status: **two studies supported** (lung, colorectal; see "Pl
 
 **Milestone 4 (colorectal, D17): done** (2026-11-12). Colorectal crosswalks; rules that apply to every study (pM1 at diagnosis, recurrences from GDC, lines of therapy T5, CEA and MMR IHC, MSI only when both scores agree, tumor-agnostic level-A evidence, one resistance implication per drug); 4 test patients reviewed, then 31 patients built, validated and loaded. The MTB app's colorectal terminology updates are separate work in the MTB app.
 
-**Then:** milestone 2, the imaging patient (needs Q16, Q17); milestone 5, distribution (packaging, "Supported studies" docs kept current).
+**Then:** milestone 2, the imaging patient (needs Q16; Q17 resolved 2026-11-16); milestone 5, distribution (packaging, "Supported studies" docs kept current).
 ## Goal
 
 Take real patients from cBioPortal and turn each one into a synthetic demo patient made of two parts:
@@ -243,10 +243,10 @@ In `luad_tcga_pan_can_atlas_2018`, cBioPortal links slides for 514 patients and 
 **Requirements:** images must (1) render in the MTB app, and (2) go through an AI interpretation pipeline that checks for imaging findings that would change therapy recommendations. Requirement (2) needs the pixels, so "link only" isn't enough: the selected patients' images are **downloaded** from IDC's buckets (free, a few hundred MB per patient). They are not re-hosted publicly unless a rendering option below needs it.
 
 **Rendering in the MTB app: options**
-- **(a) Link out to, or embed, IDC's viewers** (OHIF for radiology, SLIM for slides). No hosting, full viewer. **To check in a browser:** whether IDC allows its viewer pages to be embedded in another site (an iframe); the URLs return 404 to command-line requests, so this couldn't be tested from a script.
+- **(a) Link out to, or embed, IDC's viewers** (OHIF for radiology, SLIM for slides). No hosting, full viewer. **Checked 2026-11-16:** IDC's viewers send no `X-Frame-Options` or `Content-Security-Policy` headers and work inside an iframe (cBioPortal embeds them the same way). Their deep links return HTTP 404 to scripts, but the body is the viewer page (client-side routing) and a browser renders it.
 - **(b) An open-source viewer inside the app** (OHIF / Cornerstone3D for radiology, SLIM or OpenSeadragon for slides) reading from a DICOMweb server we control (e.g. Orthanc, or a Google Cloud Healthcare DICOM store) loaded with the downloaded series. IDC's own DICOMweb proxy is quota-limited and meant only for its viewers, so it can't serve our app. Most capable, most work.
 - **(c) Key images:** pre-rendered PNG/JPEG images (selected CT slices at standard windows, a slide thumbnail and a few regions) attached to the patient's FHIR record (R4 `Media`, or a DocumentReference), plus a link out to the IDC viewer for the full study. Simplest for the app, and the same images can feed the AI.
-- **Proposed:** (c) plus link-out first; (b) later if the demo needs full interactive viewing.
+- **Resolved (2026-11-16, Q17): (a), embedded.** The MTB app's Imaging tab lists the record's ImagingStudy resources and embeds IDC's viewer, building the viewer URL from the Study and series UIDs. For a slide study it asks IDC's DICOMweb service for the slide names (one cached lookup per study) and opens the FFPE diagnostic slide. Key images (c) aren't needed for display; they may still be needed as AI input (Q16). The app doesn't need annotation series (SEG, ANN) in `ImagingStudy.series`: IDC's viewer offers them on its own, and Bob decided against listing them (2026-11-16).
 
 **AI interpretation: what it needs**
 - **Inputs:**
@@ -258,7 +258,7 @@ In `luad_tcga_pan_can_atlas_2018`, cBioPortal links slides for 514 patients and 
 - **To decide:** whether the AI pipeline lives in this repository or in the MTB app (the MTB app's case syntheses are outside this pipeline). Either way, this repository supplies the downloaded images, the derived key images, and the FHIR resources pointing at them.
 
 **FHIR**
-- An **ImagingStudy** per DICOM study (StudyInstanceUID, modality, series, an `endpoint` pointing at IDC), plus key images as `Media` or DocumentReference. **As built (2026-11-11):** ImagingStudy per real study, linked from the reports (mapping "Linking reports to real images"); no key images or downloads yet (Q16, Q17). AI findings, if this repository produces them, would be an imaging DiagnosticReport with Observations.
+- An **ImagingStudy** per DICOM study (StudyInstanceUID, modality, series, an `endpoint` pointing at IDC), plus key images as `Media` or DocumentReference. **As built (2026-11-11):** ImagingStudy per real study, linked from the reports (mapping "Linking reports to real images"); no key images or downloads yet (Q16). The MTB app renders these as they are (Q17). AI findings, if this repository produces them, would be an imaging DiagnosticReport with Observations.
 
 **Placing images on the timeline** (resolved 2026-11-11: `ImagingStudy.started` = the linked report's shifted date; the note gives the real DICOM date the viewer shows; README caveat)
 - What the AI concludes depends on *when* the scan was taken: a pre-treatment baseline and a restaging scan mean different things for therapy. DICOM headers carry IDC's own (de-identified) dates, e.g. 2003-02-05 for `TCGA-50-8460`'s CT, while the TCGA clinical data counts days from diagnosis and gives no calendar diagnosis date. **To check:** whether the scan date can be placed relative to diagnosis (e.g. IDC or TCIA clinical metadata, or the date-shifting convention used for the TCGA collections). If it can't, each demo patient's scans get a stated, plausible position (e.g. staging at diagnosis), recorded in the run CSV.
@@ -443,6 +443,6 @@ A dedicated pass on how cBioPortal data maps into FHIR (mCODE) and Mongo, field 
   - choose date shifts that keep each patient in their original treatment era
   - treat the history as past and focus the demo on the tumor board's next-step recommendation
 - **Q16. Where the imaging AI pipeline lives** (to come back to): in this repository or in the MTB app? Either way this repository supplies the downloaded images, key images and FHIR pointers (see "Imaging").
-- **Q17. Image rendering in the MTB app** (to come back to): key images plus a link to IDC's viewer, or a full interactive viewer in the app from the start? See "Imaging" options (a)–(c).
+- **Q17. Image rendering in the MTB app: resolved 2026-11-16.** IDC's viewer embedded in the app's Imaging tab, option (a); see "Imaging". No change to this repository was needed.
 - **Q18. Genomics Reporting 2.0.0 vs 3.0.0. Decided: keep the mix.** Everything follows Genomics Reporting 2.0.0 (mCODE 4.0.0, the MTB app, the Operations server) except GenomicStudy, GenomicStudyAnalysis and the report's `genomic-study-reference` extension (3.0.0). Validate with both IGs loaded; the cross-version errors on the 2.0.0 implication code are expected. Known effect: the MTB app shows both Procedures on the treatment timeline (GenomicStudyAnalysis as an unlabeled "Procedure"); an MTB app change to skip them is planned.
 - **Q19. Wild-type biomarkers** (on the MTB backlog). In colorectal cancer, RAS/BRAF wild-type is what makes a patient a candidate for cetuximab or panitumumab, but CIViC evidence can't express "no RAS mutation", so these patients get no implication. The MTB app will handle it by layering in Cat-VRS and using the GenomicStudy (gene studied, no variant reported = wild type). Nothing to do in this pipeline for now.
